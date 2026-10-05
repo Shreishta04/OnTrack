@@ -4,6 +4,7 @@ but a fake extractor, so no store is ever contacted."""
 import pytest
 from fastapi.testclient import TestClient
 
+import sqlite3
 import main
 import services
 from extractor import Product
@@ -139,3 +140,28 @@ def test_delete_cascades(client):
     assert client.get(f"/items/{item['id']}", headers=H).status_code == 404
     # link row was removed too, so the same URL can be saved again
     assert client.post("/items/from-link", json={"url": "https://amzn.in/d/watch"}, headers=H).status_code == 201
+
+
+def test_status_moves_are_logged(client, tmp_path):
+    item = client.post("/items", json={"name": "Milk frother", "price": 439}, headers=H).json()
+    url = f"/items/{item['id']}"
+    client.patch(url, json={"status": "later"}, headers=H)
+    client.patch(url, json={"status": "later"}, headers=H)      # already later: must NOT be logged
+    client.patch(url, json={"status": "planned"}, headers=H)
+
+    conn = sqlite3.connect(tmp_path / "test.db")
+    rows = conn.execute(
+        "SELECT from_status, to_status FROM status_changes WHERE item_id = ? ORDER BY id",
+        (item["id"],)).fetchall()
+    conn.close()
+    assert rows == [(None, "planned"), ("planned", "later"), ("later", "planned")]
+
+    
+def test_mark_bought_saves_price_and_date_undo_clears(client):
+    item = client.post("/items", json={"name": "MARS lipstick", "price": 237}, headers=H).json()
+
+    item = client.patch(f"/items/{item['id']}", json={"status": "purchased"}, headers=H).json()
+    assert item["purchased_price"] == 237 and item["purchased_at"] is not None
+
+    item = client.patch(f"/items/{item['id']}", json={"status": "planned"}, headers=H).json()
+    assert item["purchased_price"] is None and item["purchased_at"] is None

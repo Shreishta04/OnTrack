@@ -61,6 +61,11 @@ def set_budget(conn: sqlite3.Connection, amount: float) -> None:
 
 
 # ------------------------------------------------------------------ writes
+def _log_status(conn, item_id, from_status, to_status):
+    conn.execute(
+        "INSERT INTO status_changes (item_id, from_status, to_status, changed_at) VALUES (?, ?, ?, ?)",
+        (item_id, from_status, to_status, now())
+    )
 
 def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
     """Store the result of one extraction attempt on a link."""
@@ -109,6 +114,7 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
     cur = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?)",
                        (name or "Untitled item", priority, now()))
     item_id = cur.lastrowid
+    _log_status(conn, item_id, None, "planned")  # initial status
     try:
         p = _insert_link(conn, item_id, url, extract_fn)
     except Duplicate:
@@ -133,18 +139,31 @@ def create_manual_item(conn, name: str, price: float | None, note: str | None = 
         "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?)",
         (name, price, note, priority, now()))
     conn.commit()
-    return cur.lastrowid
+    item_id = cur.lastrowid
+    _log_status(conn, item_id, None, "planned")
+    conn.commit()
+    return item_id
 
 
 def update_item(conn, item_id: int, **fields) -> None:
     _require_item(conn, item_id)
+    old_status = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()["status"]
     allowed = {"name", "status", "priority", "manual_price", "note"}
     changes = {k: v for k, v in fields.items() if k in allowed}
+    new_status = changes.get("status")                               # NEW: moved up
+
+    if new_status == "purchased" and old_status != "purchased":      # NEW
+        changes["purchased_price"] = item_view(conn, item_id)["price"]
+        changes["purchased_at"] = now()
+    elif old_status == "purchased" and new_status not in (None, "purchased"):  # NEW
+        changes["purchased_price"] = None
+        changes["purchased_at"] = None
+
     if changes:
-        # Column names come from the fixed `allowed` set, never from the user,
-        # so building this part of the SQL string is safe.
         sets = ", ".join(f"{k} = ?" for k in changes)
         conn.execute(f"UPDATE items SET {sets} WHERE id = ?", (*changes.values(), item_id))
+        if new_status is not None and new_status != old_status:
+            _log_status(conn, item_id, old_status, new_status)
         conn.commit()
 
 
