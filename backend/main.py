@@ -98,6 +98,13 @@ class FromLinkIn(BaseModel):
     priority: int = 0
 
 
+class FromHtmlIn(BaseModel):
+    url: HttpUrl
+    html: str = Field(..., min_length=1, description="The product page as the phone downloaded it")
+    name: str | None = None
+    priority: int = 0
+
+
 class ManualItemIn(BaseModel):
     name: str = Field(..., min_length=1, examples=["Charm bracelet"])
     price: float | None = Field(None, ge=0, examples=[1500])
@@ -155,6 +162,14 @@ def get_item_history(item_id: int, conn=Depends(get_db)):
 @app.post("/items/from-link", status_code=201, dependencies=auth)
 def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
     """Paste a product link. The item is created even if the price can't be read."""
+    item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
+    return services.item_view(conn, item_id)
+
+
+@app.post("/items/from-html", status_code=201, dependencies=auth)
+def post_from_html(body: FromHtmlIn, conn=Depends(get_db)):
+    """The phone fetched the page itself and sends it here; the server never contacts the store."""
+    extract = services.extract_from_html(body.html)
     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
     return services.item_view(conn, item_id)
 

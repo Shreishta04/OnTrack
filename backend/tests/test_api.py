@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import sqlite3
 import main
 import services
-from extractor import Product
+from extractor import Product, clean_url
 
 KEY = "test-key"
 H = {"X-API-Key": KEY}
@@ -230,3 +230,25 @@ def test_price_history_for_an_item(client):
     assert client.get("/items/999/history", headers=H).status_code == 404
 
 
+def test_amazon_links_reduce_to_dp_asin():
+    expected = "https://www.amazon.in/dp/B0DBJ7VRJ2"
+    assert clean_url("https://www.amazon.in/dp/B0DBJ7VRJ2?_encoding=UTF8") == expected
+    assert clean_url("https://www.amazon.in/Aesthetic-Highlighter/dp/B0DBJ7VRJ2/ref=sr_1_3?crid=X&th=1") == expected
+    assert clean_url("https://www.amazon.in/gp/product/B0DBJ7VRJ2?pf_rd_r=ABC") == expected
+
+
+PHONE_PAGE = (
+    '<html><head><link rel="canonical" href="https://www.amazon.in/Pastel-Highlighters/dp/B0TESTHTML?s=bazaar"/></head>'
+    '<body><span id="productTitle">Pastel Highlighters</span>'
+    '<div class="priceToPay"><span class="a-offscreen">₹289</span></div></body></html>')
+
+
+def test_add_from_phone_html_with_short_link(client):
+    body = {"url": "https://amzn.in/d/xyz", "html": PHONE_PAGE}
+    r = client.post("/items/from-html", json=body, headers=H)
+    assert r.status_code == 201
+    item = r.json()
+    assert item["name"] == "Pastel Highlighters" and item["price"] == 289
+    assert item["links"][0]["url"] == "https://www.amazon.in/dp/B0TESTHTML"   # from the canonical tag
+
+    assert client.post("/items/from-html", json=body, headers=H).status_code == 409   # duplicate

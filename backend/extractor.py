@@ -32,6 +32,7 @@ TRACKING_PARAMS = re.compile(
     r"social_share|psc|smid|th|lang)$"
 )
 AMAZON_ASIN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
+CANONICAL_LINK = re.compile(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
 
 @dataclass
 class Page:
@@ -58,6 +59,23 @@ def make_fetcher() -> Fetcher:
         r = session.get(url, timeout=20, allow_redirects=True)
         return Page(status=r.status_code, url=str(r.url), text=r.text)
 
+    return fetch
+
+
+def html_fetcher(url: str, html: str) -> Fetcher:
+    """A fetcher for a page someone else already downloaded (e.g. the iPhone).
+
+    The first request gets that page. Any further request (Shopify's .js
+    lookup, a redirect hop) gets a 404, because we must not go online for it.
+    """
+    m = CANONICAL_LINK.search(html)
+    page = Page(200, m.group(1) if m else url, html)
+    calls = []
+
+    def fetch(u: str) -> Page:
+        calls.append(u)
+        return page if len(calls) == 1 else Page(404, u, "")
+    
     return fetch
 
 

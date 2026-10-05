@@ -18,7 +18,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from extractor import Product, clean_url, extract, make_fetcher
+from extractor import Product, clean_url, extract, html_fetcher, make_fetcher
 
 ExtractFn = Callable[[str], Product]
 
@@ -45,6 +45,9 @@ def default_extract(url: str) -> Product:
     # across the threads that refresh() runs extractions on.
     return extract(url, make_fetcher())
 
+def extract_from_html(html: str) -> ExtractFn:
+    """An extractor that reads a page the phone already fetched. Never goes online."""
+    return lambda url: extract(url, html_fetcher(url, html))
 
 # ------------------------------------------------------------------ budget
 
