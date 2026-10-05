@@ -253,3 +253,19 @@ def test_add_from_phone_html_with_short_link(client):
     assert item["links"][0]["url"] == "https://www.amazon.in/dp/B0TESTHTML"   # from the canonical tag
 
     assert client.post("/items/from-html", data=form, files=page, headers=H).status_code == 409   # duplicate
+
+
+def test_from_html_falls_back_to_server_for_other_stores(client):
+    loading_page = "<html><title>Loading…</title></html>"           # e.g. a Savana share page
+    form = {"url": "https://www.savana.com/details/1"}
+    item = client.post("/items/from-html", data=form,
+                       files={"html": ("p.html", loading_page, "text/html")}, headers=H).json()
+    assert item["name"] == "Cherry Cable Cover" and item["price"] == 273   # came from the server fetch
+
+
+def test_from_html_never_falls_back_for_amazon(client):
+    no_price = '<html><body><span id="productTitle">Mystery Pen</span></body></html>'
+    form = {"url": "https://www.amazon.in/dp/B0NOPRICE1"}
+    item = client.post("/items/from-html", data=form,
+                       files={"html": ("p.html", no_price, "text/html")}, headers=H).json()
+    assert item["name"] == "Mystery Pen" and item["needs_price"]

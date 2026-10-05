@@ -177,13 +177,13 @@ def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_e
 @app.post("/items/from-html", status_code=201, dependencies=auth)
 def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
                    name: str | None = Form(None), priority: int = Form(0),
-                   conn=Depends(get_db)):
-    """The phone fetched the page itself and uploads it here; the server never contacts the store."""
+                   conn=Depends(get_db), extract=Depends(get_extract)):
+    """The phone fetched the page and uploads it here. Non-Amazon pages fall back to a server fetch."""
     page = html.file.read().decode("utf-8", errors="replace")
     if not page.strip():
         raise HTTPException(status_code=422, detail="The uploaded page is empty")
-    extract = services.extract_from_html(page)
-    item_id = services.create_item_from_link(conn, str(url), extract, name, priority)
+    extract_fn = services.extract_from_html(page, fallback=extract)
+    item_id = services.create_item_from_link(conn, str(url), extract_fn, name, priority)
     return services.item_view(conn, item_id)
 
 

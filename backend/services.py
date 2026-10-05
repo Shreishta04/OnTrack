@@ -17,6 +17,7 @@ import random
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Callable
+from urllib.parse import urlsplit
 
 from extractor import Product, clean_url, extract, html_fetcher, make_fetcher
 
@@ -45,9 +46,20 @@ def default_extract(url: str) -> Product:
     # across the threads that refresh() runs extractions on.
     return extract(url, make_fetcher())
 
-def extract_from_html(html: str) -> ExtractFn:
-    """An extractor that reads a page the phone already fetched. Never goes online."""
-    return lambda url: extract(url, html_fetcher(url, html))
+def _is_amazon(url: str | None) -> bool:
+    host = urlsplit(url or "").netloc
+    return "amazon." in host or "amzn." in host
+
+
+def extract_from_html(html: str, fallback: ExtractFn | None = None) -> ExtractFn:
+    """Read a page the phone already fetched. If that gives no price and the
+    store isn't Amazon, let the server fetch the page itself instead."""
+    def run(url: str) -> Product:
+        p = extract(url, html_fetcher(url, html))
+        if p.ok or fallback is None or _is_amazon(url) or _is_amazon(p.url):
+            return p
+        return fallback(url)
+    return run
 
 # ------------------------------------------------------------------ budget
 
