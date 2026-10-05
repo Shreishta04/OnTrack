@@ -218,10 +218,10 @@ OnTrack/
 
 ## Development log
 
-| Date | Milestone |
-|---|---|
-| 2026-10-05 | Researched existing apps; chose Python backend + React PWA + iOS Shortcut |
-| 2026-10-05 | Built extractor; solved Amazon/Fastrack bot detection with `curl_cffi`; Savana JS redirects and embedded JSON |
-| 2026-10-05 | Set up venv, git and GitHub on Windows (two GitHub accounts on one machine) |
-| 2026-10-05 | Built FastAPI backend with SQLite, items/links/price-history model, 24 passing tests |
-| 2026-10-05 | Identified the datacenter-IP risk; designed phone-side fetching as the fix |
+**2026-10-05**
+- Researched existing apps; chose a Python backend, React PWA and iOS Shortcut
+- Built the extractor; solved Amazon/Fastrack bot detection with `curl_cffi`, plus Savana's JavaScript redirects and embedded JSON
+- Set up venv, git and GitHub on Windows (two GitHub accounts on one machine)
+- Built the FastAPI backend with SQLite, an items/links/price-history model and 24 passing tests
+- Identified the datacenter-IP risk; designed phone-side fetching as the fix
+- Replaced the `planned` true/false flag with a `status` field (planned / later / purchased) so items can move between lists; added a `status_changes` table for history
