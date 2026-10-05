@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, HttpUrl
 import db
 import services
 from services import Duplicate, NotFound
-
+from typing import Literal
 load_dotenv()   # reads settings from .env (kept out of git) into environment variables
 
 
@@ -111,7 +111,7 @@ class LinkIn(BaseModel):
 
 class ItemPatch(BaseModel):
     name: str | None = Field(None, min_length=1)
-    planned: bool | None = None
+    status: Literal["planned", "later", "purchased"] | None = None
     priority: int | None = None
     manual_price: float | None = Field(None, ge=0)
     note: str | None = None

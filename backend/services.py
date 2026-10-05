@@ -138,7 +138,7 @@ def create_manual_item(conn, name: str, price: float | None, note: str | None = 
 
 def update_item(conn, item_id: int, **fields) -> None:
     _require_item(conn, item_id)
-    allowed = {"name", "planned", "priority", "manual_price", "note"}
+    allowed = {"name", "status", "priority", "manual_price", "note"}
     changes = {k: v for k, v in fields.items() if k in allowed}
     if changes:
         # Column names come from the fixed `allowed` set, never from the user,
@@ -200,7 +200,9 @@ def item_view(conn, item_id: int) -> dict:
     return {
         "id": row["id"],
         "name": row["name"],
-        "planned": bool(row["planned"]),
+        "status": row["status"],
+        "purchased_price": row["purchased_price"],
+        "purchased_at": row["purchased_at"],
         "priority": row["priority"],
         "note": row["note"],
         "manual_price": row["manual_price"],
@@ -223,8 +225,7 @@ def summary(conn) -> dict:
     """The numbers at the top of the app."""
     budget = get_budget(conn)
     items = list_items(conn)
-    planned = [i for i in items if i["planned"] and i["price"] is not None]
-
+    planned = [i for i in items if i["status"] == "planned" and i["price"] is not None]
     # Walk planned items in priority order and mark which still fit the budget.
     running, fits = 0.0, {}
     for item in planned:

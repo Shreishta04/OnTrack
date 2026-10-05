@@ -1,5 +1,5 @@
 """
-Database layer: one SQLite file, four tables.
+Database layer: one SQLite file, five tables.
 
   settings       key/value pairs (the monthly budget lives here)
   items          things you want to buy ("Smartwatch")
@@ -7,6 +7,8 @@ Database layer: one SQLite file, four tables.
                  an item's price is its cheapest link
   price_history  one row per successful price check, so we can show
                  "↓ ₹40 since you saved it" and the lowest price seen
+  status_changes one row per status move (planned → later → planned → purchased),
+                 so we can answer "what did I postpone?"
 
 Items and links are separate tables because one thing you want can be sold in
 several places. If every link were its own item, the watch would be counted
@@ -27,10 +29,12 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS items (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT    NOT NULL,
-    planned      INTEGER NOT NULL DEFAULT 1,   -- 1 = buying this month, counts toward budget
+    status       TEXT    NOT NULL DEFAULT 'planned',  -- 'planned' | 'later' | 'purchased'
     priority     INTEGER NOT NULL DEFAULT 0,   -- higher = buy first
     manual_price REAL,                         -- used only when no link has a price
     note         TEXT,
+    purchased_price REAL,                      -- what you actually paid
+    purchased_at TEXT,                         -- when you actually bought it
     created_at   TEXT    NOT NULL
 );
 
@@ -54,6 +58,14 @@ CREATE TABLE IF NOT EXISTS price_history (
     price      REAL    NOT NULL,
     mrp        REAL,
     checked_at TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS status_changes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id    INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    from_status TEXT,
+    to_status   TEXT   NOT NULL,
+    changed_at  TEXT   NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_links_item   ON links(item_id);

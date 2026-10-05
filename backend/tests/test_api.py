@@ -103,7 +103,7 @@ def test_unplanned_items_dont_count(client):
     client.post("/items", json={"name": "Maybe later", "price": 999}, headers=H)
     item = client.post("/items", json={"name": "Needed", "price": 100}, headers=H).json()
     first = client.get("/items", headers=H).json()[0]
-    client.patch(f"/items/{first['id']}", json={"planned": False}, headers=H)
+    client.patch(f"/items/{first['id']}", json={"status": "later"}, headers=H)
     assert client.get("/summary", headers=H).json()["planned_total"] == 100
 
 
