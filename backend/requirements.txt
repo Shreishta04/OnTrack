@@ -1,0 +1,8 @@
+curl_cffi
+beautifulsoup4
+lxml
+fastapi
+uvicorn[standard]
+python-dotenv
+pytest
+httpx

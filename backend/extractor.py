@@ -164,6 +164,13 @@ def try_amazon(soup: BeautifulSoup, url: str, html: str) -> Product | None:
             if (m := re.search(pattern, html)) and (price := parse_price(m.group(1))):
                 break
 
+    # The struck-through "M.R.P.: ₹279" shown beside the deal price.
+    mrp_el = soup.select_one(
+        "#corePriceDisplay_desktop_feature_div .basisPrice .a-offscreen, "
+        "#corePriceDisplay_desktop_feature_div .a-text-price[data-a-strike] .a-offscreen, "
+        ".basisPrice .a-offscreen")
+    mrp = parse_price(mrp_el.get_text()) if mrp_el else None
+
     img_el = soup.select_one("#landingImage, #imgBlkFront")
     if not title_el and price is None:
         return None
@@ -172,6 +179,7 @@ def try_amazon(soup: BeautifulSoup, url: str, html: str) -> Product | None:
         url=url, ok=price is not None, method="amazon",
         title=title_el.get_text(strip=True) if title_el else None,
         price=price,
+        mrp=mrp if (mrp and price and mrp > price) else None,
         image=(img_el.get("data-old-hires") or img_el.get("src")) if img_el else None,
         error=None if price is not None else (
             "Amazon shows no main seller/price for this item right now." if no_buybox

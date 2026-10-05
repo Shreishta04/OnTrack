@@ -2,3 +2,6 @@
 debug/
 __pycache__/
 .pytest_cache/
+.env
+*.db
+git restore --staged backend/links.txt

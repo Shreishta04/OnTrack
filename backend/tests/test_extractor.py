@@ -4,7 +4,8 @@ from extractor import extract, clean_url, parse_price, Page
 
 AMAZON = """<html><body>
 <span id="productTitle"> Maybelline Instant Age Rewind Eraser Concealer </span>
-<div id="corePriceDisplay_desktop_feature_div"><span class="a-price"><span class="a-offscreen">₹749.00</span></span></div>
+<div id="corePriceDisplay_desktop_feature_div"><span class="a-price"><span class="a-offscreen">₹749.00</span></span>
+<span class="basisPrice">M.R.P.: <span class="a-price a-text-price" data-a-strike="true"><span class="a-offscreen">₹899.00</span></span></span></div>
 <img id="landingImage" src="https://m.media-amazon.com/x.jpg"></body></html>"""
 
 # Visible price block missing, but the hidden twister input carries it.
@@ -47,6 +48,7 @@ def test_amazon_short_link_redirect_and_price():
                        redirects={"https://amzn.in/d/abc": "https://www.amazon.in/dp/B0TEST"})
     p = extract("https://amzn.in/d/abc", fetch)
     assert p.ok and p.price == 749 and "Maybelline" in p.title and p.method == "amazon"
+    assert p.mrp == 899
 
 
 def test_amazon_hidden_input_fallback():
