@@ -235,8 +235,12 @@ def item_view(conn, item_id: int) -> dict:
     }
 
 
-def list_items(conn) -> list[dict]:
-    ids = [r["id"] for r in conn.execute("SELECT id FROM items ORDER BY priority DESC, id")]
+def list_items(conn, status: str | None = None) -> list[dict]:
+    if status:
+        rows = conn.execute("SELECT id FROM items WHERE status = ? ORDER BY priority DESC, id", (status,))
+    else:
+        rows = conn.execute("SELECT id FROM items ORDER BY priority DESC, id")
+    ids = [r["id"] for r in rows]
     return [item_view(conn, i) for i in ids]
 
 

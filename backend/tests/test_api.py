@@ -189,3 +189,17 @@ def test_refresh_skips_bought_items(client):
     r = client.post("/refresh?force=true", headers=H).json()
     assert r["checked"] == 0                                    # bought item not fetched
     assert client.get(f"/items/{item['id']}", headers=H).json()["price"] == 273
+
+def test_items_filtered_by_status(client):
+    client.post("/items", json={"name": "Watch", "price": 1999}, headers=H)
+    frother = client.post("/items", json={"name": "Frother", "price": 439}, headers=H).json()
+    client.patch(f"/items/{frother['id']}", json={"status": "later"}, headers=H)
+
+    def names(status):
+        return [i["name"] for i in client.get(f"/items?status={status}", headers=H).json()]
+
+    assert names("planned") == ["Watch"]
+    assert names("later") == ["Frother"]
+    assert names("purchased") == []
+    assert sorted(names("all")) == ["Frother", "Watch"]
+    assert client.get("/items?status=latr", headers=H).status_code == 422

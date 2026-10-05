@@ -141,8 +141,8 @@ def put_budget(body: BudgetIn, conn=Depends(get_db)):
 
 
 @app.get("/items", dependencies=auth)
-def get_items(conn=Depends(get_db)):
-    return services.list_items(conn)
+def get_items(status: Literal["planned", "later", "purchased", "all"] = "all", conn=Depends(get_db)):
+    return services.list_items(conn, None if status == "all" else status)
 
 
 @app.post("/items/from-link", status_code=201, dependencies=auth)
