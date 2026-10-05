@@ -13,7 +13,7 @@ import secrets
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
@@ -166,11 +166,24 @@ def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_e
     return services.item_view(conn, item_id)
 
 
+# @app.post("/items/from-html", status_code=201, dependencies=auth)
+# def post_from_html(body: FromHtmlIn, conn=Depends(get_db)):
+#     """The phone fetched the page itself and sends it here; the server never contacts the store."""
+#     print("from-html:", len(body.html), "chars | starts:", body.html[:80].replace("\n", " "))   # TEMP debug
+#     extract = services.extract_from_html(body.html)
+#     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
+#     return services.item_view(conn, item_id)
+
 @app.post("/items/from-html", status_code=201, dependencies=auth)
-def post_from_html(body: FromHtmlIn, conn=Depends(get_db)):
-    """The phone fetched the page itself and sends it here; the server never contacts the store."""
-    extract = services.extract_from_html(body.html)
-    item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
+def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
+                   name: str | None = Form(None), priority: int = Form(0),
+                   conn=Depends(get_db)):
+    """The phone fetched the page itself and uploads it here; the server never contacts the store."""
+    page = html.file.read().decode("utf-8", errors="replace")
+    if not page.strip():
+        raise HTTPException(status_code=422, detail="The uploaded page is empty")
+    extract = services.extract_from_html(page)
+    item_id = services.create_item_from_link(conn, str(url), extract, name, priority)
     return services.item_view(conn, item_id)
 
 

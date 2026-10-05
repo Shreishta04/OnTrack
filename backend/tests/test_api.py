@@ -244,11 +244,12 @@ PHONE_PAGE = (
 
 
 def test_add_from_phone_html_with_short_link(client):
-    body = {"url": "https://amzn.in/d/xyz", "html": PHONE_PAGE}
-    r = client.post("/items/from-html", json=body, headers=H)
+    form = {"url": "https://amzn.in/d/xyz"}
+    page = {"html": ("page.html", PHONE_PAGE, "text/html")}
+    r = client.post("/items/from-html", data=form, files=page, headers=H)
     assert r.status_code == 201
     item = r.json()
     assert item["name"] == "Pastel Highlighters" and item["price"] == 289
     assert item["links"][0]["url"] == "https://www.amazon.in/dp/B0TESTHTML"   # from the canonical tag
 
-    assert client.post("/items/from-html", json=body, headers=H).status_code == 409   # duplicate
+    assert client.post("/items/from-html", data=form, files=page, headers=H).status_code == 409   # duplicate
