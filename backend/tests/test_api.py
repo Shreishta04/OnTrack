@@ -217,3 +217,16 @@ def test_purchased_price_can_be_set_and_edited(client):
     other = client.post("/items", json={"name": "Brush", "price": 170}, headers=H).json()
     other = client.patch(f"/items/{other['id']}", json={"purchased_price": 100}, headers=H).json()
     assert other["purchased_price"] is None                      # not bought -> ignored
+
+def test_price_history_for_an_item(client):
+    item = client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H).json()
+    client.catalogue["https://www.savana.com/details/1"] = Product(
+        url="https://www.savana.com/details/1", ok=True, title="Cherry Cable Cover",
+        price=250, mrp=390, method="savana")
+    client.post(f"/items/{item['id']}/refresh", headers=H)
+
+    history = client.get(f"/items/{item['id']}/history", headers=H).json()
+    assert [h["price"] for h in history] == [273, 250]          # saved, then dropped
+    assert client.get("/items/999/history", headers=H).status_code == 404
+
+

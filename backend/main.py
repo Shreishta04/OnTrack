@@ -146,6 +146,12 @@ def get_items(status: Literal["planned", "later", "purchased", "all"] = "all", c
     return services.list_items(conn, None if status == "all" else status)
 
 
+@app.get("/items/{item_id}/history", dependencies=auth)
+def get_item_history(item_id: int, conn=Depends(get_db)):
+    """Every price check for this item's links, oldest first."""
+    return services.price_history(conn, item_id)
+
+
 @app.post("/items/from-link", status_code=201, dependencies=auth)
 def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
     """Paste a product link. The item is created even if the price can't be read."""

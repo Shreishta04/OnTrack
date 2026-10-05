@@ -187,7 +187,6 @@ def _require_item(conn, item_id: int) -> None:
 
 
 # ------------------------------------------------------------------- reads
-
 def _link_view(conn, row: sqlite3.Row) -> dict:
     hist = conn.execute(
         "SELECT price FROM price_history WHERE link_id = ? ORDER BY checked_at, id", (row["id"],)
@@ -244,6 +243,18 @@ def list_items(conn, status: str | None = None) -> list[dict]:
         rows = conn.execute("SELECT id FROM items ORDER BY priority DESC, id")
     ids = [r["id"] for r in rows]
     return [item_view(conn, i) for i in ids]
+
+
+def price_history(conn, item_id: int) -> list[dict]:
+    _require_item(conn, item_id)
+    rows = conn.execute(
+        """SELECT price_history.link_id, links.url, price_history.price,
+                  price_history.mrp, price_history.checked_at
+           FROM price_history JOIN links ON links.id = price_history.link_id
+           WHERE links.item_id = ?
+           ORDER BY price_history.checked_at, price_history.id""",
+        (item_id,)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def summary(conn) -> dict:
