@@ -13,7 +13,7 @@ import secrets
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
@@ -98,6 +98,13 @@ class FromLinkIn(BaseModel):
     priority: int = 0
 
 
+class FromHtmlIn(BaseModel):
+    url: HttpUrl
+    html: str = Field(..., min_length=1, description="The product page as the phone downloaded it")
+    name: str | None = None
+    priority: int = 0
+
+
 class ManualItemIn(BaseModel):
     name: str = Field(..., min_length=1, examples=["Charm bracelet"])
     price: float | None = Field(None, ge=0, examples=[1500])
@@ -156,6 +163,27 @@ def get_item_history(item_id: int, conn=Depends(get_db)):
 def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
     """Paste a product link. The item is created even if the price can't be read."""
     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
+    return services.item_view(conn, item_id)
+
+
+# @app.post("/items/from-html", status_code=201, dependencies=auth)
+# def post_from_html(body: FromHtmlIn, conn=Depends(get_db)):
+#     """The phone fetched the page itself and sends it here; the server never contacts the store."""
+#     print("from-html:", len(body.html), "chars | starts:", body.html[:80].replace("\n", " "))   # TEMP debug
+#     extract = services.extract_from_html(body.html)
+#     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
+#     return services.item_view(conn, item_id)
+
+@app.post("/items/from-html", status_code=201, dependencies=auth)
+def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
+                   name: str | None = Form(None), priority: int = Form(0),
+                   conn=Depends(get_db), extract=Depends(get_extract)):
+    """The phone fetched the page and uploads it here. Non-Amazon pages fall back to a server fetch."""
+    page = html.file.read().decode("utf-8", errors="replace")
+    if not page.strip():
+        raise HTTPException(status_code=422, detail="The uploaded page is empty")
+    extract_fn = services.extract_from_html(page, fallback=extract)
+    item_id = services.create_item_from_link(conn, str(url), extract_fn, name, priority)
     return services.item_view(conn, item_id)
 
 

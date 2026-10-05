@@ -1,8 +1,8 @@
 # OnTrack
 
-> A budget-aware wishlist for Indian online shopping. Paste a product link from any store, and OnTrack pulls the product name and price automatically, totals everything you plan to buy, and shows what's left of your monthly budget.
+> A budget-aware wishlist for Indian online shopping. Share or paste a product link from any store, and OnTrack pulls the product name and price automatically, totals everything you plan to buy, and shows what's left of your monthly budget.
 
-**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcut 🚧 (in progress on `feature/phone-fetch`) · Frontend ⏳ · Deployment ⏳
+**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone "Add to OnTrack" Shortcut ✅ (local network) · Frontend ⏳ · Deployment ⏳
 
 ---
 
@@ -15,7 +15,7 @@ On a tight monthly budget, the list of things I want to buy keeps growing while 
 - adding everything up by hand, and redoing it whenever a price changed,
 - comparing the same product across stores by hand.
 
-**Goal:** paste a link, and everything else is automatic.
+**Goal:** share a link, and everything else is automatic.
 
 ## Does this already exist?
 
@@ -31,7 +31,8 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 ## Features
 
 **Saving items**
-- **Paste a link → item saved** with name, current price, MRP and image
+- **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet
+- **Paste a link** (laptop / API) → same result, with the server fetching the page itself
 - **One item, several stores:** e.g. the same watch on Amazon and Fastrack. Only the **cheapest** link counts toward the budget, so items are never counted twice
 - **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected
 - **Manual items** for anything without a usable link
@@ -55,22 +56,25 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 ## Architecture
 
 ```
-iPhone (Shortcut + PWA) / laptop browser
-                │  HTTPS + JSON
-                ▼
-     FastAPI backend (Python)
-      ├── main.py       HTTP layer: routes, validation, auth, error → status code
-      ├── services.py   Business rules: lists, budget, cheapest link, refresh
-      ├── db.py         Database tables and connections
-      └── extractor.py  Product link → name, price, MRP, image
-                │
-                ▼
-        SQLite (local) → Postgres (when hosted)
+iPhone Share Sheet ──► "Add to OnTrack" Shortcut
+                         1. downloads the product page on the phone's own connection
+                         2. uploads link + page (multipart form) ──┐
+                                                                    │
+Laptop browser / future PWA ── link only ─────────────────────────┤  HTTP + JSON
+                                                                    ▼
+                                                 FastAPI backend (Python)
+                                                  ├── main.py       HTTP layer: routes, validation, auth, error → status code
+                                                  ├── services.py   Business rules: lists, budget, cheapest link, refresh
+                                                  ├── db.py         Database tables and connections
+                                                  └── extractor.py  Page → name, price, MRP, image
+                                                                    │
+                                                                    ▼
+                                                   SQLite (local) → Postgres (when hosted)
 ```
 
 The layers are kept separate on purpose. `services.py` doesn't know about HTTP, so its rules can be tested directly and reused (for example by a future bot). All SQL lives in `db.py` and `services.py`, so moving from SQLite to Postgres is a contained change.
 
-**Fetching is separate from parsing.** The extractor never downloads anything itself; it calls whatever *fetcher* it is given. Tests pass a fake one, so the parsers are tested without the internet. The same seam is what will let the iPhone do the downloading (see challenge 10).
+**Fetching is separate from parsing.** The extractor never downloads anything itself; it calls whatever *fetcher* it is given. On the laptop that's a Chrome-like downloader. For pages the phone already downloaded, it's a fetcher that simply hands back the uploaded page and refuses to go online for anything else. The same parsers run either way, which is what made phone-side fetching a small change.
 
 ### Data model
 
@@ -91,8 +95,9 @@ Deleting an item removes its links, price history and status history with it (`O
 |---|---|---|
 | Backend language | **Python** | Best scraping ecosystem (`curl_cffi`, BeautifulSoup) and fast iteration. Considered Java (too heavy for a small API) and Node.js (its browser-impersonation libraries are less mature, and that turned out to be the hardest part of the project) |
 | API framework | **FastAPI** | Small amount of code, automatic validation with Pydantic, free interactive docs at `/docs` |
-| Fetching | **curl_cffi** | Reproduces Chrome's TLS handshake. See "Challenges" below |
+| Fetching | **curl_cffi** (laptop/server) · **the iPhone itself** (Amazon) | See "Challenges" below |
 | Parsing | **BeautifulSoup + lxml**, regex for embedded JSON | Standard, robust HTML parsing |
+| Uploads | **python-multipart** | Lets FastAPI read the page the phone uploads as a file |
 | Database | **SQLite** now → **Postgres** when hosted | SQLite needs no setup locally; hosted servers don't keep local files, so production needs a separate database |
 | Frontend | **React + TypeScript** (planned) | Browsers only run JavaScript; React is the most widely used frontend library |
 | App type | **PWA** (Progressive Web App) | One codebase that runs in any browser and installs on the iPhone home screen. No App Store needed |
@@ -162,22 +167,37 @@ A single `status` column only knows where an item is *now*. Once something moved
 
 **Problem:** extraction works from a home connection, but hosted servers use **datacenter IP addresses**, which Amazon treats with much more suspicion than home or mobile ones.
 
-**Planned solution: split fetching from parsing.** The iPhone downloads the page over its own connection (which looks like a normal shopper), and the server only reads it with the same parsers.
+**Solution: split fetching from parsing.** The iPhone downloads the page over its own connection (which looks like a normal shopper), and the server only reads it with the same parsers.
 
-**Validated:** a three-step test Shortcut downloaded an Amazon page on both Wi-Fi and mobile data. Both came back as the full desktop product page with no bot-check, and the existing extractor read the title, price (₹289), MRP (₹699) and image from it without any changes. The server side is being built on the `feature/phone-fetch` branch.
+**Validation first:** a three-step test Shortcut downloaded an Amazon page on both Wi-Fi and mobile data. Both came back as the full desktop product page with no bot-check, and the existing extractor read the title, price (₹289), MRP (₹699) and image from it without any changes.
+
+**Problems found while building it:**
+- **Shortcuts turned the page into plain text.** Sending the page inside a JSON text field made iOS convert the HTML into readable text and drop every tag: the server received 16,116 characters starting with "Skip to • Main content" instead of ~1.7 million characters of HTML. A temporary debug line on the server confirmed this. **Fix:** upload the page as a **file** (multipart form), which iOS passes through byte for byte.
+- **The Amazon app shares the link twice**, so the Shortcut received a list of two URLs and glued them together (`https://amzn.in/d/…https://amzn.in/d/…`). **Fix:** take only the first item from the list.
+- **Short links.** The phone follows `amzn.in/d/…` to the real page, but the server only sees the short link. **Fix:** read the page's own `<link rel="canonical">` tag for its real address, which the ASIN rule then cleans.
+- **No second downloads.** Some strategies normally fetch a second URL (Shopify's `.js` data). The phone-page fetcher answers any second request with a 404 instead of going online, so those strategies give up cleanly rather than crashing on HTML they expected to be JSON.
+- **The phone couldn't reach the laptop.** The server listens only on `127.0.0.1` (this machine) by default. **Fix:** run with `--host 0.0.0.0` on home Wi-Fi, and set the Windows network profile to *Private* so the firewall allows it.
+
+- **Google shares a message, not a link** (`Source: www.savana.com https://share.google/…`), so taking the first "link" saved Savana's homepage, and for Littlebox the text itself. **Fix:** extract every URL from what was shared and take the **last** one.
+- **Some stores have their own share menu** (Savana's website), which doesn't list the Shortcut. **Fix:** Copy Link, then run the Shortcut; with nothing shared, it reads the clipboard.
+- **Other stores' extra steps.** Savana share links redirect with JavaScript, which the phone can't run, and the phone-page fetcher refuses second downloads. **Fix:** if the phone's page gives no price **and the store isn't Amazon**, the server fetches the link itself. Only Amazon blocks servers, so this is safe, and Amazon never falls back.
+
+**Result:** sharing a product from the Amazon app saved it with the exact variant's title, price (₹237), MRP (₹279), image and cleaned link, without the server ever contacting Amazon. Littlebox (₹699, read from the phone's page alone) and Savana (₹318, via Copy Link) work through the same Shortcut.
 
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
+- **Savana links keep extra parameters** (`?vid=…&shem=…`, where `shem` is Google tracking), so the same product saved from two places may not be recognised as a duplicate yet.
+- **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
 
 ## Store support
 
 | Store | Method | Status |
 |---|---|---|
-| Amazon.in (incl. `amzn.in` short links) | Chrome-like fetch + selectors / embedded price data | ✅ |
-| Fastrack | JSON-LD (`schema.org/Product`) | ✅ |
-| Savana (incl. share links) | JS redirect follow + embedded app data | ✅ |
-| Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products · ⏳ carts |
+| Amazon.in (incl. `amzn.in` short links) | Chrome-like fetch, or page fetched by the iPhone · selectors / embedded price data | ✅ (laptop and iPhone) |
+| Fastrack | JSON-LD (`schema.org/Product`) | ✅ laptop · ⏳ iPhone not tested |
+| Savana (incl. share links) | JS redirect follow + embedded app data | ✅ laptop · ✅ iPhone (Copy Link, server fallback) |
+| Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products (laptop and iPhone) · ⏳ carts |
 | Myntra, Ajio, Meesho | Not tested yet | ⏳ |
 
 ## Getting started (Windows)
@@ -212,6 +232,23 @@ python extractor.py https://amzn.in/d/xxxxxx
 python extractor.py -f links.txt --debug     # --debug saves each fetched page to debug/
 ```
 
+### Using the iPhone Shortcut with the local server
+
+1. Start the server so other devices on the Wi-Fi can reach it: `uvicorn main:app --reload --host 0.0.0.0`
+2. Find the laptop's address with `ipconfig` (**Wireless LAN adapter Wi-Fi → IPv4 Address**). Check it from the phone's Safari: `http://<IP>:8000/health` should show `{"ok":true}`.
+3. Only do this on a trusted home network. The API key still protects every endpoint.
+
+The **Add to OnTrack** Shortcut (shown in the Share Sheet, URLs only):
+
+| # | Action | Setting |
+|---|---|---|
+| 1 | Receive URLs and Text from Share Sheet | If there's no input: **Get Clipboard** (for stores with their own share menu: Copy Link, then run the Shortcut) |
+| 2 | Get URLs from Input | Pulls every link out of a shared message |
+| 3 | Get Item from List | **Last** item (Google puts the real link last; Amazon's two copies are identical) |
+| 4 | Get Contents of URL | Item from List → downloads the page on the phone |
+| 5 | Get Contents of URL | `http://<IP>:8000/items/from-html` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 4 |
+| 6 | Show Content | The server's reply, kept as full JSON for now so null values or errors are easy to spot |
+
 ## API overview
 
 All endpoints except `/health` require the `X-API-Key` header.
@@ -223,7 +260,8 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `GET` | `/items?status=` | List items: `planned`, `later`, `purchased` or `all` (default) |
 | `GET` | `/items/{id}` | One item with its links |
 | `GET` | `/items/{id}/history` | Every price check for the item's links, oldest first |
-| `POST` | `/items/from-link` | Save an item from a product link |
+| `POST` | `/items/from-link` | Save an item from a link (the server fetches the page) |
+| `POST` | `/items/from-html` | Save an item from a page the phone already fetched (form: `url` + `html` file); non-Amazon pages without a price fall back to a server fetch |
 | `POST` | `/items` | Save a manual item (name + price) |
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
@@ -239,8 +277,8 @@ OnTrack/
 │   ├── main.py            FastAPI routes
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
-│   ├── extractor.py       product link → details
-│   ├── tests/             offline tests (fake pages, fake extractor), 32 passing
+│   ├── extractor.py       page → product details
+│   ├── tests/             offline tests (fake pages, fake extractor), 35 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/              (coming next)
@@ -252,9 +290,12 @@ OnTrack/
 - [x] Backend API with budget, multi-link items, price history, on-demand refresh
 - [x] Lists (planned / later / purchased) with move history, purchases and spent-this-month budget
 - [x] Validate phone-side fetching (datacenter IP problem)
-- [ ] 🚧 `POST /items/from-html` so the phone can send pages it fetched itself (`feature/phone-fetch`)
-- [ ] 🚧 iOS Shortcut: "Add to OnTrack" from the share sheet (`feature/phone-fetch`)
+- [x] `POST /items/from-html` so the phone can send pages it fetched itself
+- [x] iOS Shortcut: "Add to OnTrack" from the share sheet (local network)
+- [x] Server fallback for non-Amazon stores when the phone's page isn't enough
+- [ ] Clean Savana links to `/details/<id>` for reliable duplicate detection
 - [ ] iOS Shortcut: "Refresh prices" through the phone (could run daily with an iOS Automation)
+- [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
 - [ ] React + TypeScript PWA frontend
 - [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary
 - [ ] Myntra / Ajio / Meesho support
@@ -274,5 +315,6 @@ OnTrack/
 - Summary subtracts what was spent this month; refresh skips bought items
 - Added `GET /items?status=` for the app's tabs and `GET /items/{id}/history` for price charts
 - Found a duplicate-detection bug by using the API (`?_encoding=UTF8`); replaced the Amazon block-list with an ASIN allow-list
-- Validated phone-side fetching on Wi-Fi and mobile data; the existing extractor read the phone's page unchanged. 32 tests passing
-- Started the `feature/phone-fetch` branch for the server side of phone fetching
+- Validated phone-side fetching on Wi-Fi and mobile data; the existing extractor read the phone's page unchanged
+- Built `POST /items/from-html` on the `feature/phone-fetch` branch and the "Add to OnTrack" Shortcut; fixed the doubled share link, the HTML-to-text conversion (switched to a file upload) and short links (canonical tag). First product saved end to end from the Amazon app
+- Added the server fallback for non-Amazon stores; fixed Google's share format in the Shortcut (all URLs → last one) and added a clipboard fallback. Amazon, Littlebox and Savana all saved from the iPhone. 35 tests passing
