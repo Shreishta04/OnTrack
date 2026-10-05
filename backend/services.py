@@ -148,12 +148,14 @@ def create_manual_item(conn, name: str, price: float | None, note: str | None = 
 def update_item(conn, item_id: int, **fields) -> None:
     _require_item(conn, item_id)
     old_status = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()["status"]
-    allowed = {"name", "status", "priority", "manual_price", "note"}
+    allowed = {"name", "status", "priority", "manual_price", "note", "purchased_price"}
     changes = {k: v for k, v in fields.items() if k in allowed}
     new_status = changes.get("status")                               # NEW: moved up
 
+    if "purchased_price" in changes and (new_status or old_status) != "purchased":
+        del changes["purchased_price"]
     if new_status == "purchased" and old_status != "purchased":      # NEW
-        changes["purchased_price"] = item_view(conn, item_id)["price"]
+        changes.setdefault("purchased_price", item_view(conn, item_id)["price"])
         changes["purchased_at"] = now()
     elif old_status == "purchased" and new_status not in (None, "purchased"):  # NEW
         changes["purchased_price"] = None

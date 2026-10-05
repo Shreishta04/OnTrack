@@ -203,3 +203,17 @@ def test_items_filtered_by_status(client):
     assert names("purchased") == []
     assert sorted(names("all")) == ["Frother", "Watch"]
     assert client.get("/items?status=latr", headers=H).status_code == 422
+
+def test_purchased_price_can_be_set_and_edited(client):
+    item = client.post("/items", json={"name": "Frother", "price": 439}, headers=H).json()
+    url = f"/items/{item['id']}"
+
+    item = client.patch(url, json={"status": "purchased", "purchased_price": 399}, headers=H).json()
+    assert item["purchased_price"] == 399                        # your price beats the listed 439
+
+    item = client.patch(url, json={"purchased_price": 380}, headers=H).json()
+    assert item["purchased_price"] == 380                        # editable afterwards
+
+    other = client.post("/items", json={"name": "Brush", "price": 170}, headers=H).json()
+    other = client.patch(f"/items/{other['id']}", json={"purchased_price": 100}, headers=H).json()
+    assert other["purchased_price"] is None                      # not bought -> ignored

@@ -115,6 +115,7 @@ class ItemPatch(BaseModel):
     priority: int | None = None
     manual_price: float | None = Field(None, ge=0)
     note: str | None = None
+    purchased_price: float | None = Field(None, ge=0)
 
 
 # ------------------------------------------------------------------- routes
