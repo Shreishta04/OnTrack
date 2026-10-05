@@ -178,12 +178,16 @@ A single `status` column only knows where an item is *now*. Once something moved
 - **No second downloads.** Some strategies normally fetch a second URL (Shopify's `.js` data). The phone-page fetcher answers any second request with a 404 instead of going online, so those strategies give up cleanly rather than crashing on HTML they expected to be JSON.
 - **The phone couldn't reach the laptop.** The server listens only on `127.0.0.1` (this machine) by default. **Fix:** run with `--host 0.0.0.0` on home Wi-Fi, and set the Windows network profile to *Private* so the firewall allows it.
 
-**Result:** sharing a product from the Amazon app saved it with the exact variant's title, price (₹237), MRP (₹279), image and cleaned link, without the server ever contacting Amazon.
+- **Google shares a message, not a link** (`Source: www.savana.com https://share.google/…`), so taking the first "link" saved Savana's homepage, and for Littlebox the text itself. **Fix:** extract every URL from what was shared and take the **last** one.
+- **Some stores have their own share menu** (Savana's website), which doesn't list the Shortcut. **Fix:** Copy Link, then run the Shortcut; with nothing shared, it reads the clipboard.
+- **Other stores' extra steps.** Savana share links redirect with JavaScript, which the phone can't run, and the phone-page fetcher refuses second downloads. **Fix:** if the phone's page gives no price **and the store isn't Amazon**, the server fetches the link itself. Only Amazon blocks servers, so this is safe, and Amazon never falls back.
+
+**Result:** sharing a product from the Amazon app saved it with the exact variant's title, price (₹237), MRP (₹279), image and cleaned link, without the server ever contacting Amazon. Littlebox (₹699, read from the phone's page alone) and Savana (₹318, via Copy Link) work through the same Shortcut.
 
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
-- **Non-Amazon stores via the phone:** pages that need a second step (Savana share-link redirects, possibly Shopify's `.js` data) won't work from a phone-sent page yet. Planned fix: if the phone's page gives no price and the store isn't Amazon, the server fetches the page itself.
+- **Savana links keep extra parameters** (`?vid=…&shem=…`, where `shem` is Google tracking), so the same product saved from two places may not be recognised as a duplicate yet.
 - **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
 
 ## Store support
@@ -192,8 +196,8 @@ A single `status` column only knows where an item is *now*. Once something moved
 |---|---|---|
 | Amazon.in (incl. `amzn.in` short links) | Chrome-like fetch, or page fetched by the iPhone · selectors / embedded price data | ✅ (laptop and iPhone) |
 | Fastrack | JSON-LD (`schema.org/Product`) | ✅ laptop · ⏳ iPhone not tested |
-| Savana (incl. share links) | JS redirect follow + embedded app data | ✅ laptop · ⏳ iPhone share links need the server fallback |
-| Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products · ⏳ carts · ⏳ iPhone not tested |
+| Savana (incl. share links) | JS redirect follow + embedded app data | ✅ laptop · ✅ iPhone (Copy Link, server fallback) |
+| Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products (laptop and iPhone) · ⏳ carts |
 | Myntra, Ajio, Meesho | Not tested yet | ⏳ |
 
 ## Getting started (Windows)
@@ -238,11 +242,12 @@ The **Add to OnTrack** Shortcut (shown in the Share Sheet, URLs only):
 
 | # | Action | Setting |
 |---|---|---|
-| 1 | Receive URLs from Share Sheet | |
-| 2 | Get Item from List | First item (the Amazon app shares the link twice) |
-| 3 | Get Contents of URL | Item from List → downloads the page on the phone |
-| 4 | Get Contents of URL | `http://<IP>:8000/items/from-html` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 3 |
-| 5 | Show Content | The server's reply, kept as full JSON for now so null values or errors are easy to spot |
+| 1 | Receive URLs and Text from Share Sheet | If there's no input: **Get Clipboard** (for stores with their own share menu: Copy Link, then run the Shortcut) |
+| 2 | Get URLs from Input | Pulls every link out of a shared message |
+| 3 | Get Item from List | **Last** item (Google puts the real link last; Amazon's two copies are identical) |
+| 4 | Get Contents of URL | Item from List → downloads the page on the phone |
+| 5 | Get Contents of URL | `http://<IP>:8000/items/from-html` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 4 |
+| 6 | Show Content | The server's reply, kept as full JSON for now so null values or errors are easy to spot |
 
 ## API overview
 
@@ -256,7 +261,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `GET` | `/items/{id}` | One item with its links |
 | `GET` | `/items/{id}/history` | Every price check for the item's links, oldest first |
 | `POST` | `/items/from-link` | Save an item from a link (the server fetches the page) |
-| `POST` | `/items/from-html` | Save an item from a page the phone already fetched (form: `url` + `html` file) |
+| `POST` | `/items/from-html` | Save an item from a page the phone already fetched (form: `url` + `html` file); non-Amazon pages without a price fall back to a server fetch |
 | `POST` | `/items` | Save a manual item (name + price) |
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
@@ -273,7 +278,7 @@ OnTrack/
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 33 passing
+│   ├── tests/             offline tests (fake pages, fake extractor), 35 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/              (coming next)
@@ -287,7 +292,8 @@ OnTrack/
 - [x] Validate phone-side fetching (datacenter IP problem)
 - [x] `POST /items/from-html` so the phone can send pages it fetched itself
 - [x] iOS Shortcut: "Add to OnTrack" from the share sheet (local network)
-- [ ] Server fallback for non-Amazon stores when the phone's page isn't enough
+- [x] Server fallback for non-Amazon stores when the phone's page isn't enough
+- [ ] Clean Savana links to `/details/<id>` for reliable duplicate detection
 - [ ] iOS Shortcut: "Refresh prices" through the phone (could run daily with an iOS Automation)
 - [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
 - [ ] React + TypeScript PWA frontend
@@ -310,4 +316,5 @@ OnTrack/
 - Added `GET /items?status=` for the app's tabs and `GET /items/{id}/history` for price charts
 - Found a duplicate-detection bug by using the API (`?_encoding=UTF8`); replaced the Amazon block-list with an ASIN allow-list
 - Validated phone-side fetching on Wi-Fi and mobile data; the existing extractor read the phone's page unchanged
-- Built `POST /items/from-html` on the `feature/phone-fetch` branch and the "Add to OnTrack" Shortcut; fixed the doubled share link, the HTML-to-text conversion (switched to a file upload) and short links (canonical tag). First product saved end to end from the Amazon app. 33 tests passing
+- Built `POST /items/from-html` on the `feature/phone-fetch` branch and the "Add to OnTrack" Shortcut; fixed the doubled share link, the HTML-to-text conversion (switched to a file upload) and short links (canonical tag). First product saved end to end from the Amazon app
+- Added the server fallback for non-Amazon stores; fixed Google's share format in the Shortcut (all URLs → last one) and added a clipboard fallback. Amazon, Littlebox and Savana all saved from the iPhone. 35 tests passing
