@@ -31,7 +31,7 @@ TRACKING_PARAMS = re.compile(
     r"^(utm_.*|fbclid|gclid|ref|ref_|tag|campaign_id|ad_id|sr|qid|ub_cl|skcPGs|"
     r"social_share|psc|smid|th|lang)$"
 )
-
+AMAZON_ASIN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
 
 @dataclass
 class Page:
@@ -78,6 +78,8 @@ class Product:
 
 def clean_url(url: str) -> str:
     parts = urlsplit(url.strip())
+    if "amazon." in parts.netloc and (m := AMAZON_ASIN.search(parts.path)):
+        return urlunsplit((parts.scheme, parts.netloc, f"/dp/{m.group(1)}", "", ""))
     query = [(k, v) for k, v in parse_qsl(parts.query) if not TRACKING_PARAMS.match(k)]
     path = re.sub(r"/ref=[^/]*$", "", parts.path)   # Amazon's /ref=sr_1_19 suffix
     return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), ""))
