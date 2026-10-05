@@ -33,6 +33,7 @@ TRACKING_PARAMS = re.compile(
 )
 AMAZON_ASIN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
 CANONICAL_LINK = re.compile(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
+SAVANA_ID = re.compile(r"/details/(?:[^/?]*-)?(\d+)")
 
 @dataclass
 class Page:
@@ -98,6 +99,10 @@ def clean_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if "amazon." in parts.netloc and (m := AMAZON_ASIN.search(parts.path)):
         return urlunsplit((parts.scheme, parts.netloc, f"/dp/{m.group(1)}", "", ""))
+    if parts.netloc in ("www.savana.com", "savana.com") and (m := SAVANA_ID.search(parts.path)):
+        vid = dict(parse_qsl(parts.query)).get("vid")
+        query = urlencode({"vid": vid}) if vid else ""
+        return urlunsplit(("https", "www.savana.com", f"/details/{m.group(1)}", query, ""))
     query = [(k, v) for k, v in parse_qsl(parts.query) if not TRACKING_PARAMS.match(k)]
     path = re.sub(r"/ref=[^/]*$", "", parts.path)   # Amazon's /ref=sr_1_19 suffix
     return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), ""))
