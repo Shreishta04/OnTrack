@@ -244,9 +244,12 @@ def summary(conn) -> dict:
     """The numbers at the top of the app."""
     budget = get_budget(conn)
     items = list_items(conn)
+    month = now()[:7]                                   # e.g. "2026-10"
+    spent = sum(i["purchased_price"] or 0 for i in items
+                if i["status"] == "purchased" and (i["purchased_at"] or "").startswith(month))
     planned = [i for i in items if i["status"] == "planned" and i["price"] is not None]
     # Walk planned items in priority order and mark which still fit the budget.
-    running, fits = 0.0, {}
+    running, fits = spent, {}
     for item in planned:
         running += item["price"]
         fits[item["id"]] = budget is None or running <= budget
@@ -258,7 +261,8 @@ def summary(conn) -> dict:
     return {
         "budget": budget,
         "planned_total": total,                       # discounted prices only
-        "remaining": None if budget is None else budget - total,
+        "remaining": None if budget is None else budget - spent - total,
+        "spent_this_month": spent,
         "mrp_total": mrp_total,
         "savings_vs_mrp": mrp_total - total,
         "planned_count": len(planned),
@@ -279,10 +283,12 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
     Database writes happen back on this thread, one at a time.
     """
     delay = REFRESH_DELAY if delay is None else delay
-    query, params = "SELECT id, url, price, last_checked FROM links", ()
+    query = ("SELECT links.id, links.url, links.price, links.last_checked FROM links "
+             "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased'")
+    params = ()
     if item_id is not None:
         _require_item(conn, item_id)
-        query, params = query + " WHERE item_id = ?", (item_id,)
+        query, params = query + " AND links.item_id = ?", (item_id,)
     links = conn.execute(query, params).fetchall()
 
     cutoff = datetime.now(timezone.utc) - REFRESH_COOLDOWN

@@ -156,7 +156,7 @@ def test_status_moves_are_logged(client, tmp_path):
     conn.close()
     assert rows == [(None, "planned"), ("planned", "later"), ("later", "planned")]
 
-    
+
 def test_mark_bought_saves_price_and_date_undo_clears(client):
     item = client.post("/items", json={"name": "MARS lipstick", "price": 237}, headers=H).json()
 
@@ -165,3 +165,27 @@ def test_mark_bought_saves_price_and_date_undo_clears(client):
 
     item = client.patch(f"/items/{item['id']}", json={"status": "planned"}, headers=H).json()
     assert item["purchased_price"] is None and item["purchased_at"] is None
+
+
+def test_spent_this_month_comes_off_the_budget(client):
+    client.put("/budget", json={"amount": 1000}, headers=H)
+    bought = client.post("/items", json={"name": "Concealer", "price": 400}, headers=H).json()
+    client.post("/items", json={"name": "Bottle brush", "price": 170}, headers=H)
+    client.patch(f"/items/{bought['id']}", json={"status": "purchased"}, headers=H)
+
+    s = client.get("/summary", headers=H).json()
+    assert s["spent_this_month"] == 400
+    assert s["planned_total"] == 170                    # bought item no longer planned
+    assert s["remaining"] == 1000 - 400 - 170
+
+
+def test_refresh_skips_bought_items(client):
+    item = client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H).json()
+    client.patch(f"/items/{item['id']}", json={"status": "purchased"}, headers=H)
+    client.catalogue["https://www.savana.com/details/1"] = Product(
+        url="https://www.savana.com/details/1", ok=True, title="Cherry Cable Cover",
+        price=199, mrp=390, method="savana")                    # store price changes
+
+    r = client.post("/refresh?force=true", headers=H).json()
+    assert r["checked"] == 0                                    # bought item not fetched
+    assert client.get(f"/items/{item['id']}", headers=H).json()["price"] == 273
