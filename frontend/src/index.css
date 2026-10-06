@@ -1,111 +1,292 @@
+/* ============================================================
+   OnTrack design tokens
+   Every colour in the app comes from these variables.
+   Light is the default; dark applies when the device is in dark
+   mode (unless the user picked Light) or when the user picked Dark.
+   ============================================================ */
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --bg: #F6F1EB;          /* Linen: the page */
+  --surface: #FDFBF8;     /* Warm white: cards and panels */
+  --text: #2B211C;        /* Espresso */
+  --muted: #75685E;       /* Taupe: labels, MRP, dates */
+  --accent: #5B4237;      /* Cocoa: primary buttons, active tab */
+  --on-accent: #FDFBF8;   /* text on top of the accent */
+  --line: #E6DDD3;        /* Sand: dividers, borders */
+  --good: #5E6E52;        /* Sage text: fits budget, price dropped */
+  --good-dot: #7C8C6E;
+  --warn: #9A5038;        /* Clay text: over budget, errors */
+  --warn-dot: #B5654A;
+  --thumb: #EDE4DA;       /* image placeholder */
+  --track: #EDE4DA;       /* empty part of the budget bar */
+  --planned-bar: #C4B2A2; /* planned part of the budget bar */
+  --shadow: 0 1px 2px rgba(43, 33, 28, 0.04), 0 14px 36px rgba(43, 33, 28, 0.07);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --font-serif: 'Cormorant Garamond', Georgia, serif;
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  color-scheme: light;
 }
 
+/* Dark values: written once, used in two situations (below). */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
+  :root:not([data-theme='light']) {
+    --bg: #1C1714;
+    --surface: #26201C;
+    --text: #F1EAE2;
+    --muted: #A69888;
+    --accent: #C9A68A;
+    --on-accent: #1C1714;
+    --line: #3A322C;
+    --good: #9DAE8C;
+    --good-dot: #9DAE8C;
+    --warn: #D98A6E;
+    --warn-dot: #D98A6E;
+    --thumb: #332A24;
+    --track: #332A24;
+    --planned-bar: #6E5A4C;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.28);
+    color-scheme: dark;
   }
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+:root[data-theme='dark'] {
+  --bg: #1C1714;
+  --surface: #26201C;
+  --text: #F1EAE2;
+  --muted: #A69888;
+  --accent: #C9A68A;
+  --on-accent: #1C1714;
+  --line: #3A322C;
+  --good: #9DAE8C;
+  --good-dot: #9DAE8C;
+  --warn: #D98A6E;
+  --warn-dot: #D98A6E;
+  --thumb: #332A24;
+  --track: #332A24;
+  --planned-bar: #6E5A4C;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.28);
+  color-scheme: dark;
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.45s ease, color 0.45s ease;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Reusable pieces (used by many components)
+   ============================================================ */
+
+.serif {
+  font-family: var(--font-serif);
+}
+
+/* Numbers: same width per digit so prices line up in a column */
+.num {
+  font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+}
+
+/* The ₹ sign: smaller, lighter, slightly raised */
+.cur {
+  font-weight: 400;
+  font-size: 0.68em;
+  opacity: 0.55;
+  margin-right: 0.14em;
+  letter-spacing: 0;
+  vertical-align: 0.18em;
+}
+
+.eyebrow {
+  font-size: 11px;
   font-weight: 500;
-  color: var(--text-h);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  transition: background-color 0.45s ease, border-color 0.45s ease;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
+.btn {
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease,
+    transform 0.12s ease, filter 0.2s ease;
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.btn-secondary {
+  background: transparent;
+  border-color: var(--line);
+}
+.btn-secondary:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+.btn-quiet {
+  background: transparent;
+  color: var(--muted);
+  padding: 0 12px;
+}
+.btn-quiet:hover:not(:disabled) {
+  color: var(--warn);
+}
+
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
   display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.12s ease, background-color 0.45s ease;
+}
+.icon-btn:hover {
+  border-color: var(--muted);
+}
+.icon-btn:active {
+  transform: scale(0.94);
 }
 
-code {
+.field {
+  width: 100%;
+  height: 48px;
+  padding: 0 20px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
   font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+  transition: border-color 0.2s ease, background-color 0.45s ease;
+}
+.field::placeholder {
+  color: var(--muted);
+}
+.field:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ============================================================
+   Page layout
+   ============================================================ */
+
+.page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 28px 20px 96px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.brand {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+/* Two columns on a laptop; they stack on a phone automatically:
+   the side column wants 300px, the main column 520px, and when the
+   screen is narrower than both, flex-wrap puts main underneath. */
+.columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  align-items: flex-start;
+}
+.side {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.main {
+  flex: 999 1 520px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================
+   Motion
+   ============================================================ */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Anyone who has asked their device for less motion gets none. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
