@@ -396,3 +396,230 @@ input {
   border-top: 1px solid var(--line);
   padding-top: 16px;
 }
+
+/* ============================================================
+   Tabs
+   ============================================================ */
+
+.tabs {
+  position: relative;
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  flex: 1 1 0;
+  height: 48px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.25s ease;
+}
+.tab:hover,
+.tab[aria-selected='true'] {
+  color: var(--text);
+}
+.tab-count {
+  margin-left: 6px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
+/* The underline is as wide as one tab; moving it by 100% of its own
+   width jumps exactly one tab. The transition makes it glide. */
+.tab-underline {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 25%;
+  display: flex;
+  justify-content: center;
+  transition: transform 0.38s var(--ease);
+}
+.tab-underline span {
+  width: 40%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
+.fade-in {
+  animation: fade-up 0.4s ease;
+}
+
+/* ============================================================
+   Item rows
+   ============================================================ */
+
+.row {
+  border-bottom: 1px solid var(--line);
+}
+
+.row-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 2px;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.row-head:hover .row-name {
+  color: var(--accent);
+}
+
+.thumb {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  object-fit: cover;
+  background: var(--thumb);
+}
+.thumb-letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: var(--muted);
+}
+
+.row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.row-name {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.35;
+  transition: color 0.2s ease;
+  /* show at most two lines, then "…" */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.row-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.badge-good {
+  color: var(--good);
+}
+.badge-warn {
+  color: var(--warn);
+}
+
+.tag {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.row-price {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.row-amount {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.row-mrp {
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.plus {
+  flex: 0 0 auto;
+  color: var(--muted);
+  transition: transform 0.32s var(--ease), color 0.2s ease;
+}
+.row.open .plus {
+  transform: rotate(45deg);
+  color: var(--text);
+}
+
+.row-details {
+  padding: 0 2px 20px 70px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  animation: fade-up 0.32s var(--ease);
+}
+.row-details p {
+  margin: 0;
+}
+.drop {
+  color: var(--good);
+}
+.row-link {
+  align-self: flex-start;
+  margin-top: 4px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+}
+.row-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ============================================================
+   Empty list
+   ============================================================ */
+
+.empty {
+  padding: 56px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+.empty-title {
+  font-size: 26px;
+  font-style: italic;
+}
+.empty-text {
+  font-size: 14px;
+  color: var(--muted);
+}

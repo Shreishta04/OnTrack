@@ -1,0 +1,104 @@
+import { useState } from 'react'
+import type { Item } from '../types'
+import { shortDate, storeName } from '../format'
+import Price from './Price'
+import Thumb from './Thumb'
+
+const TAG = { planned: 'Wish list', later: 'Later', purchased: 'Bought' }
+
+// The coloured note beside the store name.
+function badgeFor(item: Item): { text: string; tone: 'good' | 'warn' | 'muted' } | null {
+  if (item.status === 'later') return { text: 'Parked', tone: 'muted' }
+  if (item.status === 'purchased') return { text: `Bought ${shortDate(item.purchased_at)}`, tone: 'muted' }
+  if (item.needs_price) return { text: 'Needs a price', tone: 'warn' }
+  if (item.fits_budget === true) return { text: 'Fits budget', tone: 'good' }
+  if (item.fits_budget === false) return { text: 'Over budget', tone: 'warn' }
+  return null // no budget set yet
+}
+
+interface ItemRowProps {
+  item: Item
+  showTag: boolean
+}
+
+export default function ItemRow({ item, showTag }: ItemRowProps) {
+  const [open, setOpen] = useState(false)
+
+  const bought = item.status === 'purchased'
+  const shownPrice = bought ? item.purchased_price : item.price
+  const showMrp = !bought && item.mrp != null && item.price != null && item.mrp > item.price
+  const badge = badgeFor(item)
+  const link = item.links.find((l) => l.id === item.best_link_id) ?? item.links[0]
+  const drop =
+    !bought && link?.price_when_saved != null && item.price != null && link.price_when_saved > item.price
+      ? link.price_when_saved - item.price
+      : 0
+
+  return (
+    <div className={open ? 'row open' : 'row'}>
+      <button className="row-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Thumb src={item.image} name={item.name} />
+
+        <div className="row-text">
+          <div className="row-name">{item.name}</div>
+          <div className="row-meta">
+            <span>{storeName(item)}</span>
+            {badge && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className={`badge badge-${badge.tone}`}>
+                  <i className="badge-dot" />
+                  {badge.text}
+                </span>
+              </>
+            )}
+            {showTag && <span className="tag">{TAG[item.status]}</span>}
+          </div>
+        </div>
+
+        <div className="row-price">
+          <Price amount={shownPrice} className="row-amount" />
+          {showMrp && <Price amount={item.mrp} className="row-mrp" />}
+        </div>
+
+        <svg className="plus" width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="row-details">
+          {bought ? (
+            <p>
+              Paid <Price amount={item.purchased_price} /> on {shortDate(item.purchased_at)} · saved to your list{' '}
+              {shortDate(item.created_at)}
+            </p>
+          ) : item.needs_price ? (
+            <p>{storeName(item)} · no price yet, you can add one by hand</p>
+          ) : (
+            <p>
+              {storeName(item)} · <Price amount={item.price} /> now
+              {link?.lowest_price_seen != null && (
+                <>
+                  {' '}· lowest seen <Price amount={link.lowest_price_seen} />
+                </>
+              )}{' '}
+              · saved {shortDate(item.created_at)}
+            </p>
+          )}
+          {drop > 0 && (
+            <p className="drop">
+              ↓ <Price amount={drop} /> since you saved it
+            </p>
+          )}
+          {link && (
+            <a className="row-link" href={link.url} target="_blank" rel="noreferrer">
+              Open in {storeName(item)} ↗
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
