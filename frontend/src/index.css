@@ -290,3 +290,16 @@ input {
     transition: none !important;
   }
 }
+
+/* ============================================================
+   Messages (loading, connection errors)
+   ============================================================ */
+
+.notice {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.notice-error {
+  color: var(--warn);
+}
