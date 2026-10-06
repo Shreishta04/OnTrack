@@ -8,6 +8,7 @@ import type { RowAction } from './components/ItemRow'
 import SettingsSheet from './components/SettingsSheet'
 import { MoonIcon, SlidersIcon, SunIcon } from './components/Icons'
 import { useTheme } from './hooks/useTheme'
+import AddLink from './components/AddLink'
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -80,6 +81,14 @@ export default function App() {
           {error && <p className="notice notice-error">{error}</p>}
           {!error && !summary && <p className="notice">Loading…</p>}
           {summary && <BudgetCard summary={summary} onBudgetSaved={load} />}
+          {summary && (
+            <AddLink
+              onAdded={async () => {
+                setTab('planned') // new items start on the wish list, so show it
+                await load()
+              }}
+            />
+          )}
         </aside>
 
         <main className="main">
