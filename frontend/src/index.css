@@ -392,10 +392,6 @@ input {
   line-height: 1.5;
   color: var(--muted);
 }
-.budget-foot {
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
-}
 
 /* ============================================================
    Tabs
@@ -637,4 +633,100 @@ input {
 .btn-quiet.is-armed {
   color: var(--warn);
   border-color: var(--warn);
+}
+
+/* ============================================================
+   Header buttons, budget editing
+   ============================================================ */
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.budget-btn {
+  align-self: flex-start;
+}
+
+.budget-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  animation: fade-up 0.3s var(--ease);
+}
+.budget-edit-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-wide {
+  width: 100%;
+  height: 48px;
+}
+
+/* ============================================================
+   Settings sheet (slides up from the bottom)
+   ============================================================ */
+
+.sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(28, 23, 20, 0.42);
+  cursor: pointer;
+  animation: fade-in 0.3s ease;
+}
+
+.sheet {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: 92vh;
+  overflow-y: auto;
+  border-radius: 26px 26px 0 0;
+  padding: 28px 24px 32px;
+  animation: sheet-up 0.38s var(--ease);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+.sheet-title {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 500;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sheet-up {
+  from { opacity: 0; transform: translateY(28px); }
+  to { opacity: 1; transform: none; }
 }

@@ -5,11 +5,16 @@ import BudgetCard from './components/BudgetCard'
 import Tabs, { type TabId } from './components/Tabs'
 import ItemList from './components/ItemList'
 import type { RowAction } from './components/ItemRow'
+import SettingsSheet from './components/SettingsSheet'
+import { MoonIcon, SlidersIcon, SunIcon } from './components/Icons'
+import { useTheme } from './hooks/useTheme'
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<TabId>('planned')
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const theme = useTheme()
 
   // Fetch the latest numbers and items again (after a button press).
   async function load() {
@@ -56,13 +61,25 @@ export default function App() {
           <div className="brand">OnTrack</div>
           <div className="eyebrow">Your wish list, on budget</div>
         </div>
+        <div className="header-actions">
+          <button
+            className="icon-btn"
+            aria-label={theme.isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            onClick={() => theme.setPref(theme.isDark ? 'light' : 'dark')}
+          >
+            {theme.isDark ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <button className="icon-btn" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
+            <SlidersIcon />
+          </button>
+        </div>
       </header>
 
       <div className="columns">
         <aside className="side">
           {error && <p className="notice notice-error">{error}</p>}
           {!error && !summary && <p className="notice">Loading…</p>}
-          {summary && <BudgetCard summary={summary} />}
+          {summary && <BudgetCard summary={summary} onBudgetSaved={load} />}
         </aside>
 
         <main className="main">
@@ -75,6 +92,10 @@ export default function App() {
           )}
         </main>
       </div>
+
+      {settingsOpen && (
+        <SettingsSheet onClose={() => setSettingsOpen(false)} onSaved={load} />
+      )}
     </div>
   )
 }

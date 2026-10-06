@@ -1,20 +1,40 @@
+import { useState, type FormEvent } from 'react'
+import { setBudget } from '../api'
 import type { Summary } from '../types'
 import Price from './Price'
 
 interface BudgetCardProps {
   summary: Summary
+  onBudgetSaved: () => Promise<void>
 }
 
-export default function BudgetCard({ summary }: BudgetCardProps) {
-  const { budget, spent_this_month: spent, planned_total: planned, remaining, savings_vs_mrp: savings } = summary
+export default function BudgetCard({ summary, onBudgetSaved }: BudgetCardProps) {
+  const { budget, spent_this_month: spent, planned_total: planned, remaining } = summary
+  const [editing, setEditing] = useState(false)
+
+  const editor = editing ? (
+    <BudgetEditor
+      current={budget}
+      onCancel={() => setEditing(false)}
+      onSaved={async () => {
+        await onBudgetSaved()
+        setEditing(false)
+      }}
+    />
+  ) : (
+    <button className="btn btn-secondary budget-btn" onClick={() => setEditing(true)}>
+      {budget == null ? 'Set a budget' : 'Edit budget'}
+    </button>
+  )
 
   // No budget set yet: nothing to measure against.
   if (budget == null || remaining == null) {
     return (
       <section className="card budget-card" aria-label="Budget summary">
         <div className="eyebrow">No budget yet</div>
-        <p className="budget-note">Set a monthly budget in Settings to see what's left after your wish list.</p>
+        <p className="budget-note">Set a monthly budget to see what's left after your wish list.</p>
         <Stats spent={spent} planned={planned} budget={null} />
+        {editor}
       </section>
     )
   }
@@ -38,16 +58,67 @@ export default function BudgetCard({ summary }: BudgetCardProps) {
 
       <Stats spent={spent} planned={planned} budget={budget} />
 
-      <p className="budget-note budget-foot">
-        {savings > 0 ? (
-          <>
-            Your wish list is <Price amount={savings} /> below MRP.
-          </>
-        ) : (
-          'Prices are what you would pay today.'
-        )}
-      </p>
+      {editor}
     </section>
+  )
+}
+
+// The small form that appears inside the card when you tap "Edit budget".
+function BudgetEditor({
+  current,
+  onCancel,
+  onSaved,
+}: {
+  current: number | null
+  onCancel: () => void
+  onSaved: () => Promise<void>
+}) {
+  const [draft, setDraft] = useState(current == null ? '' : String(current))
+  const [saving, setSaving] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault() // stop the browser reloading the page, which forms do by default
+    const amount = Number(draft)
+    if (draft.trim() === '' || !Number.isFinite(amount) || amount < 0) {
+      setProblem('Enter an amount, like 15000.')
+      return
+    }
+    setSaving(true)
+    setProblem(null)
+    try {
+      await setBudget(amount)
+      await onSaved()
+    } catch (err) {
+      setProblem((err as Error).message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form className="budget-edit" onSubmit={handleSubmit}>
+      <label className="eyebrow" htmlFor="budget-input">Monthly budget (₹)</label>
+      <input
+        id="budget-input"
+        className="field"
+        type="number"
+        min="0"
+        inputMode="numeric"
+        placeholder="15000"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        autoFocus
+      />
+      {problem && <p className="notice notice-error">{problem}</p>}
+      <div className="budget-edit-actions">
+        <button className="btn btn-primary" type="submit" disabled={saving}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button className="btn btn-quiet" type="button" onClick={onCancel} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 
