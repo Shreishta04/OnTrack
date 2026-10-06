@@ -623,3 +623,18 @@ input {
   font-size: 14px;
   color: var(--muted);
 }
+
+/* ============================================================
+   Row buttons
+   ============================================================ */
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.btn-quiet.is-armed {
+  color: var(--warn);
+  border-color: var(--warn);
+}

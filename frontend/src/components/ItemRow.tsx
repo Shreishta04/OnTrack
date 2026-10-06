@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Item } from '../types'
+import type { Item, Status } from '../types'
 import { shortDate, storeName } from '../format'
 import Price from './Price'
 import Thumb from './Thumb'
@@ -16,13 +16,35 @@ function badgeFor(item: Item): { text: string; tone: 'good' | 'warn' | 'muted' }
   return null // no budget set yet
 }
 
+// What a button in a row can ask for: move to a list, or delete.
+export type RowAction = Status | 'delete'
+
 interface ItemRowProps {
   item: Item
   showTag: boolean
+  onAction: (item: Item, action: RowAction) => Promise<void>
 }
 
-export default function ItemRow({ item, showTag }: ItemRowProps) {
+export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
   const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)               // a request is in progress
+  const [confirmDelete, setConfirmDelete] = useState(false) // first tap on Delete
+
+  async function run(action: RowAction) {
+    setBusy(true)
+    await onAction(item, action)
+    setBusy(false)
+  }
+
+  function handleDelete() {
+    if (!confirmDelete) {
+      // First tap only arms the button; it calms down again after 3 seconds.
+      setConfirmDelete(true)
+      setTimeout(() => setConfirmDelete(false), 3000)
+      return
+    }
+    run('delete')
+  }
 
   const bought = item.status === 'purchased'
   const shownPrice = bought ? item.purchased_price : item.price
@@ -97,6 +119,41 @@ export default function ItemRow({ item, showTag }: ItemRowProps) {
               Open in {storeName(item)} ↗
             </a>
           )}
+
+          <div className="row-actions">
+            {item.status === 'planned' && (
+              <>
+                <button className="btn btn-primary" disabled={busy} onClick={() => run('purchased')}>
+                  Mark bought
+                </button>
+                <button className="btn btn-secondary" disabled={busy} onClick={() => run('later')}>
+                  Move to Later
+                </button>
+              </>
+            )}
+            {item.status === 'later' && (
+              <>
+                <button className="btn btn-primary" disabled={busy} onClick={() => run('planned')}>
+                  Back to wish list
+                </button>
+                <button className="btn btn-secondary" disabled={busy} onClick={() => run('purchased')}>
+                  Mark bought
+                </button>
+              </>
+            )}
+            {item.status === 'purchased' && (
+              <button className="btn btn-secondary" disabled={busy} onClick={() => run('planned')}>
+                Undo purchase
+              </button>
+            )}
+            <button
+              className={confirmDelete ? 'btn btn-quiet is-armed' : 'btn btn-quiet'}
+              disabled={busy}
+              onClick={handleDelete}
+            >
+              {confirmDelete ? 'Tap again to delete' : 'Delete'}
+            </button>
+          </div>
         </div>
       )}
     </div>

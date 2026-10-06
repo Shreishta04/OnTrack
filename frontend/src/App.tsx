@@ -1,20 +1,44 @@
 import { useEffect, useState } from 'react'
-import { getSummary } from './api'
-import type { Summary } from './types'
+import { deleteItem, getSummary, patchItem } from './api'
+import type { Item, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
 import Tabs, { type TabId } from './components/Tabs'
 import ItemList from './components/ItemList'
+import type { RowAction } from './components/ItemRow'
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<TabId>('planned')
 
+  // Fetch the latest numbers and items again (after a button press).
+  async function load() {
+    try {
+      setSummary(await getSummary())
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  // First load, when the page opens.
   useEffect(() => {
     getSummary()
       .then(setSummary)
       .catch((e: Error) => setError(e.message))
   }, [])
+
+  // A row button was pressed: tell the server, then reload so the budget
+  // card, counts and lists all reflect the change.
+  async function handleAction(item: Item, action: RowAction) {
+    try {
+      if (action === 'delete') await deleteItem(item.id)
+      else await patchItem(item.id, { status: action })
+      await load()
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
 
   const items = summary?.items ?? []
   const counts = {
@@ -46,7 +70,7 @@ export default function App() {
           {/* key={tab}: a new tab means a fresh list, which replays the fade-in */}
           {summary && (
             <div key={tab} className="fade-in">
-              <ItemList items={visible} tab={tab} />
+              <ItemList items={visible} tab={tab} onAction={handleAction} />
             </div>
           )}
         </main>
