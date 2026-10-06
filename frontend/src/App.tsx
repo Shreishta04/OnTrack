@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getSummary } from './api'
 import type { Summary } from './types'
+import BudgetCard from './components/BudgetCard'
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -25,7 +26,7 @@ export default function App() {
         <aside className="side">
           {error && <p className="notice notice-error">{error}</p>}
           {!error && !summary && <p className="notice">Loading…</p>}
-          {summary && <p className="notice">Connected · {summary.items.length} items</p>}
+          {summary && <BudgetCard summary={summary} />}
         </aside>
         <main className="main">{/* tabs and item list go here */}</main>
       </div>
