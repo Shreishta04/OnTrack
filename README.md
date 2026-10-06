@@ -49,7 +49,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **What fits:** planned items are walked in priority order, and each is marked as fitting the budget or not
 
 **Prices**
-- **Refresh on demand:** a button to re-check prices. Bought items are skipped
+- **Refresh on demand:** re-check prices when asked. Bought items are skipped. Amazon prices are refreshed **through the iPhone** (a "Refresh OnTrack" Shortcut), every other store by the server
 - **Price history** per item: every check, oldest first, ready for a chart ("↓ ₹40 since you saved it", lowest price seen)
 - **Graceful failures:** if a store blocks a check, the last known price is kept and the reason is shown
 
@@ -152,6 +152,8 @@ Trying the API by hand, I noticed a saved Amazon link still ended in `?_encoding
 
 **Fix:** for Amazon, switch from a **block-list** (remove known junk) to an **allow-list** (keep only what identifies the product). Every Amazon product, including each colour or size variant, has a 10-character ID (ASIN) after `/dp/` or `/gp/product/`. Every Amazon link is reduced to `https://www.amazon.in/dp/<ASIN>`, so all forms of a link collapse to one string.
 
+**The same problem on Savana:** a link saved through Google came back as `/details/1789982?vid=7&shem=aimgspe%2C`. `shem` is Google tracking, but what was `vid`? Before writing any code, I copied the link for the same T-shirt in two colours: `vid=6` (blue) and `vid=2` (pink). So `vid` is the **colour**, and dropping it would make two different colours look like one item, the opposite bug. **Fix:** another allow-list. Savana links are reduced to `https://www.savana.com/details/<id>?vid=<colour>`, and a test checks that two colours stay two different links. Share links (`sharein.savana.com`) are left alone so the tested redirect-following still runs; they get cleaned once the redirect lands on the real page.
+
 ### 8. Refreshing prices without getting blocked
 
 Re-checking every price each time the app opens would look like a bot and risks CAPTCHAs. **Decision:** refresh only when the user taps a button. Even then, links checked in the last hour are skipped (unless forced), at most 3 are fetched at once, requests are spaced out with random pauses, and **bought items are never re-checked**. "Later" items still are, because a price drop is exactly what might move one back to the wish list.
@@ -182,12 +184,16 @@ A single `status` column only knows where an item is *now*. Once something moved
 - **Some stores have their own share menu** (Savana's website), which doesn't list the Shortcut. **Fix:** Copy Link, then run the Shortcut; with nothing shared, it reads the clipboard.
 - **Other stores' extra steps.** Savana share links redirect with JavaScript, which the phone can't run, and the phone-page fetcher refuses second downloads. **Fix:** if the phone's page gives no price **and the store isn't Amazon**, the server fetches the link itself. Only Amazon blocks servers, so this is safe, and Amazon never falls back.
 
+- **Refreshing Amazon prices through the phone too.** Adding items was only half the problem: re-checking prices would still send the server to Amazon. **Fix:** a second Shortcut, *Refresh OnTrack*. It asks the server which Amazon links are due (`GET /refresh/phone-list`: Amazon only, not bought, not checked in the last hour), downloads each page on the phone in a loop, and uploads it to `POST /links/{id}/from-html`. The server reuses the same parsing and price-recording code as every other check, so price history and "lowest seen" just work. The one-hour cooldown rule was moved into a shared `_is_due()` helper, so the server's refresh and the phone's list can never disagree.
+- **400 Bad Request on upload.** The first refresh run failed on every link. Reproducing it locally showed why: FastAPI accepts uploaded **files** of any size but caps plain form **fields** at 1 MB, and the Shortcut had sent the 1.7 MB page as a text field (`"Field exceeded maximum size of 1024KB"`). **Fix:** set the Shortcut's form field type to **File**.
+
 **Result:** sharing a product from the Amazon app saved it with the exact variant's title, price (₹237), MRP (₹279), image and cleaned link, without the server ever contacting Amazon. Littlebox (₹699, read from the phone's page alone) and Savana (₹318, via Copy Link) work through the same Shortcut.
 
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
-- **Savana links keep extra parameters** (`?vid=…&shem=…`, where `shem` is Google tracking), so the same product saved from two places may not be recognised as a duplicate yet.
+- **The server's `/refresh` still includes Amazon links.** That's fine from a home connection, but once deployed it would send Amazon requests from a datacenter. Planned fix at deployment: `/refresh` skips Amazon, which the phone handles.
+- **Two taps to refresh everything:** the Shortcut for Amazon, `/refresh` for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
 
 ## Store support
@@ -249,6 +255,26 @@ The **Add to OnTrack** Shortcut (shown in the Share Sheet, URLs only):
 | 5 | Get Contents of URL | `http://<IP>:8000/items/from-html` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 4 |
 | 6 | Show Content | The server's reply, kept as full JSON for now so null values or errors are easy to spot |
 
+The **Refresh OnTrack** Shortcut (run directly, or daily with an iOS Automation):
+
+| # | Action | Setting |
+|---|---|---|
+| 1 | Get Contents of URL | `GET http://<IP>:8000/refresh/phone-list` · header `X-API-Key` (add `?force=true` to ignore the one-hour cooldown while testing) |
+| 2 | Repeat with Each | item in the list from step 1 |
+| 3 | ↳ Get Dictionary Value | `url` in Repeat Item |
+| 4 | ↳ Get Dictionary Value | `link_id` in Repeat Item |
+| 5 | ↳ Get Contents of URL | the `url` value → downloads the Amazon page on the phone |
+| 6 | ↳ Get Contents of URL | `http://<IP>:8000/links/<link_id>/from-html` · POST · header `X-API-Key` · Form body: `html` (**File**, not Text) = page from step 5 |
+| 7 | End Repeat | |
+| 8 | Show Content | Repeat Results: one `{"link_id", "ok", "old_price", "new_price", "error"}` per link |
+
+**Who refreshes what:**
+
+| Store | Downloads the page when refreshing | Triggered by |
+|---|---|---|
+| Amazon | the iPhone | Refresh OnTrack Shortcut |
+| Every other store | the server | `POST /refresh` (later: the app's Refresh button) |
+
 ## API overview
 
 All endpoints except `/health` require the `X-API-Key` header.
@@ -268,6 +294,8 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `DELETE` | `/items/{id}` · `/links/{id}` | Remove an item or a link |
 | `POST` | `/refresh?force=` | Re-check prices (skips recently checked links and bought items) |
 | `POST` | `/items/{id}/refresh` | Re-check one item |
+| `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, not checked in the last hour |
+| `POST` | `/links/{id}/from-html` | Upload a page the phone downloaded for one link; records the new price |
 
 ## Project structure
 
@@ -278,7 +306,7 @@ OnTrack/
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 35 passing
+│   ├── tests/             offline tests (fake pages, fake extractor), 37 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/              (coming next)
@@ -293,11 +321,13 @@ OnTrack/
 - [x] `POST /items/from-html` so the phone can send pages it fetched itself
 - [x] iOS Shortcut: "Add to OnTrack" from the share sheet (local network)
 - [x] Server fallback for non-Amazon stores when the phone's page isn't enough
-- [ ] Clean Savana links to `/details/<id>` for reliable duplicate detection
-- [ ] iOS Shortcut: "Refresh prices" through the phone (could run daily with an iOS Automation)
+- [x] Clean Savana links to `/details/<id>?vid=<colour>` for reliable duplicate detection
+- [x] iOS Shortcut: "Refresh OnTrack" refreshes Amazon prices through the phone
+- [ ] One-tap refresh: the Shortcut also triggers the server's `/refresh` for other stores
+- [ ] Daily automatic refresh with an iOS Automation (after deployment, so it works on any network)
 - [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
 - [ ] React + TypeScript PWA frontend
-- [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary
+- [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
 
@@ -318,3 +348,9 @@ OnTrack/
 - Validated phone-side fetching on Wi-Fi and mobile data; the existing extractor read the phone's page unchanged
 - Built `POST /items/from-html` on the `feature/phone-fetch` branch and the "Add to OnTrack" Shortcut; fixed the doubled share link, the HTML-to-text conversion (switched to a file upload) and short links (canonical tag). First product saved end to end from the Amazon app
 - Added the server fallback for non-Amazon stores; fixed Google's share format in the Shortcut (all URLs → last one) and added a clipboard fallback. Amazon, Littlebox and Savana all saved from the iPhone. 35 tests passing
+
+**2026-10-06**
+- Found that Savana's `vid` is the colour by comparing two colours' links; reduced Savana links to product id + colour
+- Built phone-side price refresh: `GET /refresh/phone-list`, `POST /links/{id}/from-html`, a shared cooldown helper, and the "Refresh OnTrack" Shortcut with a loop over due Amazon links
+- Debugged a 400 on upload by reproducing it locally (1 MB form-field limit) and fixed the Shortcut to send a File
+- Tested the Shortcuts from office Wi-Fi as well as home. 37 tests passing
