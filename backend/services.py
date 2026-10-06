@@ -305,6 +305,12 @@ def summary(conn) -> dict:
 
 # ----------------------------------------------------------------- refresh
 
+def _is_due(last_checked: str | None, force: bool) -> bool:
+    """A link needs checking if forced, never checked, or checked over an hour ago."""
+    if force or not last_checked:
+        return True
+    return datetime.fromisoformat(last_checked) < datetime.now(timezone.utc) - REFRESH_COOLDOWN
+
 async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
                   item_id: int | None = None, delay: tuple[float, float] | None = None) -> dict:
     """Re-check prices. Skips links checked within REFRESH_COOLDOWN unless force=True.
@@ -323,9 +329,7 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
         query, params = query + " AND links.item_id = ?", (item_id,)
     links = conn.execute(query, params).fetchall()
 
-    cutoff = datetime.now(timezone.utc) - REFRESH_COOLDOWN
-    due = [l for l in links if force or not l["last_checked"]
-           or datetime.fromisoformat(l["last_checked"]) < cutoff]
+    due = [l for l in links if _is_due(l["last_checked"], force)]
 
     gate = asyncio.Semaphore(REFRESH_CONCURRENCY)
 
@@ -347,3 +351,24 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
     conn.commit()
     return {"checked": len(due), "skipped_recent": len(links) - len(due),
             "changed": changes, "failed": failed}
+
+def phone_refresh_list(conn, force: bool = False) -> list[dict]:
+    """Amazon links the phone should re-download: not bought, and due for a check."""
+    rows = conn.execute(
+        "SELECT links.id, links.url, links.last_checked FROM links "
+        "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' ORDER BY links.id"
+    ).fetchall()
+    return [{"link_id": r["id"], "url": r["url"]} for r in rows
+            if _is_amazon(r["url"]) and _is_due(r["last_checked"], force)]
+
+
+def refresh_link_from_html(conn, link_id: int, html: str) -> dict:
+    """Record a price check from a page the phone downloaded for this link."""
+    row = conn.execute("SELECT url, price FROM links WHERE id = ?", (link_id,)).fetchone()
+    if not row:
+        raise NotFound(f"link {link_id}")
+    p = extract_from_html(html)(row["url"])           # no fallback: this is the Amazon path
+    _record_check(conn, link_id, p)
+    conn.commit()
+    return {"link_id": link_id, "ok": p.ok, "old_price": row["price"],
+            "new_price": p.price, "error": p.error}
