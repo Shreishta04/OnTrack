@@ -236,3 +236,17 @@ async def post_item_refresh(item_id: int, force: bool = True,
     """Re-check one item's links. Forced by default: you asked for this one specifically."""
     result = await services.refresh(conn, extract, force=force, item_id=item_id)
     return {**result, "item": services.item_view(conn, item_id)}
+
+@app.get("/refresh/phone-list", dependencies=auth)
+def get_phone_refresh_list(force: bool = False, conn=Depends(get_db)):
+    """Amazon links the phone should download and upload back (bought items and recent checks skipped)."""
+    return services.phone_refresh_list(conn, force)
+
+
+@app.post("/links/{link_id}/from-html", dependencies=auth)
+def post_link_from_html(link_id: int, html: UploadFile = File(...), conn=Depends(get_db)):
+    """Upload a freshly downloaded page for one link; records the new price."""
+    page = html.file.read().decode("utf-8", errors="replace")
+    if not page.strip():
+        raise HTTPException(status_code=422, detail="The uploaded page is empty")
+    return services.refresh_link_from_html(conn, link_id, page)

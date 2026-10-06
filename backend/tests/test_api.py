@@ -269,3 +269,28 @@ def test_from_html_never_falls_back_for_amazon(client):
     item = client.post("/items/from-html", data=form,
                        files={"html": ("p.html", no_price, "text/html")}, headers=H).json()
     assert item["name"] == "Mystery Pen" and item["needs_price"]
+
+def test_savana_links_keep_only_product_and_colour():
+    expected = "https://www.savana.com/details/1789982?vid=6"
+    assert clean_url("https://www.savana.com/details/1789982?vid=6&shem=aimgspe%2C") == expected
+    assert clean_url("https://savana.com/details/printed-pullover-t-shirt-1789982?ub_cl=in_en-IN&vid=6") == expected
+    assert clean_url("https://www.savana.com/details/1789982?vid=2") != expected      # another colour = another link
+
+
+def test_phone_refresh_list_and_upload(client):
+    item = client.post("/items/from-link", json={"url": "https://amzn.in/d/watch"}, headers=H).json()
+    client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H)
+
+    due = client.get("/refresh/phone-list?force=true", headers=H).json()
+    assert [d["url"] for d in due] == ["https://www.amazon.in/dp/B0WATCH"]    # Amazon only
+    assert client.get("/refresh/phone-list", headers=H).json() == []         # just checked: cooldown
+
+    page = ('<html><body><span id="productTitle">Fastrack Ryz Watch</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹1,799</span></div></body></html>')
+    upload = {"html": ("p.html", page, "text/html")}
+    r = client.post(f"/links/{due[0]['link_id']}/from-html", files=upload, headers=H).json()
+    assert r["ok"] and r["old_price"] == 1999 and r["new_price"] == 1799
+
+    item = client.get(f"/items/{item['id']}", headers=H).json()
+    assert item["price"] == 1799 and item["links"][0]["lowest_price_seen"] == 1799
+    assert client.post("/links/999/from-html", files=upload, headers=H).status_code == 404
