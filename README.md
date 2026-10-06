@@ -2,7 +2,7 @@
 
 > A budget-aware wishlist for Indian online shopping. Share or paste a product link from any store, and OnTrack pulls the product name and price automatically, totals everything you plan to buy, and shows what's left of your monthly budget.
 
-**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone "Add to OnTrack" Shortcut ✅ (local network) · Frontend ⏳ · Deployment ⏳
+**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local) · Browser extension ⏳ · Deployment ⏳
 
 ---
 
@@ -48,6 +48,16 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Spent this month** comes off the budget: `remaining = budget − spent this month − planned`
 - **What fits:** planned items are walked in priority order, and each is marked as fitting the budget or not
 
+**Web app**
+- **Budget card:** one big number, "Left after wish list" (or "Over budget" in clay), a bar showing spent / planned / left, and the three totals underneath. **Edit budget** opens a small form right inside the card
+- **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
+- **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a status badge (Fits budget / Over budget / Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
+- **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
+- **Paste a link** to add an item from the laptop, with a hint that Amazon works best through the phone
+- **When a store won't give a price,** the row shows the real reason (for example *"Amazon showed a bot-check page"*) and a box to type the price by hand
+- **Light and dark mode:** follows the device until you tap the moon/sun button, then remembers your choice
+- **Works on laptop and phone:** two columns on a laptop, one on a phone, with no separate phone code
+
 **Prices**
 - **Refresh on demand:** re-check prices when asked. Bought items are skipped. Amazon prices are refreshed **through the iPhone** (a "Refresh OnTrack" Shortcut), every other store by the server
 - **Price history** per item: every check, oldest first, ready for a chart ("↓ ₹40 since you saved it", lowest price seen)
@@ -60,7 +70,7 @@ iPhone Share Sheet ──► "Add to OnTrack" Shortcut
                          1. downloads the product page on the phone's own connection
                          2. uploads link + page (multipart form) ──┐
                                                                     │
-Laptop browser / future PWA ── link only ─────────────────────────┤  HTTP + JSON
+React web app (laptop / phone browser) ── JSON ──────────────────┤  HTTP + JSON
                                                                     ▼
                                                  FastAPI backend (Python)
                                                   ├── main.py       HTTP layer: routes, validation, auth, error → status code
@@ -75,6 +85,13 @@ Laptop browser / future PWA ── link only ───────────�
 The layers are kept separate on purpose. `services.py` doesn't know about HTTP, so its rules can be tested directly and reused (for example by a future bot). All SQL lives in `db.py` and `services.py`, so moving from SQLite to Postgres is a contained change.
 
 **Fetching is separate from parsing.** The extractor never downloads anything itself; it calls whatever *fetcher* it is given. On the laptop that's a Chrome-like downloader. For pages the phone already downloaded, it's a fetcher that simply hands back the uploaded page and refuses to go online for anything else. The same parsers run either way, which is what made phone-side fetching a small change.
+
+### Frontend
+
+The web app is a React + TypeScript single page, built with Vite. Each part of the screen is a **component** in its own file (`BudgetCard`, `Tabs`, `ItemRow`, `AddLink`, `SettingsSheet`, …). Two decisions shape it:
+
+- **The server is the single source of truth.** After any button press the app calls the API and then reloads `/summary`, instead of recalculating budgets in the browser. The backend already computes spent-this-month, what fits and purchase prices (and is tested), so the screen can never drift from the database.
+- **One place talks to the server.** `api.ts` adds the API key, reads the JSON and turns failures into plain sentences ("Can't reach the server…", "The API key was rejected…"). Components only call functions like `getSummary()` or `patchItem()`.
 
 ### Data model
 
@@ -99,9 +116,25 @@ Deleting an item removes its links, price history and status history with it (`O
 | Parsing | **BeautifulSoup + lxml**, regex for embedded JSON | Standard, robust HTML parsing |
 | Uploads | **python-multipart** | Lets FastAPI read the page the phone uploads as a file |
 | Database | **SQLite** now → **Postgres** when hosted | SQLite needs no setup locally; hosted servers don't keep local files, so production needs a separate database |
-| Frontend | **React + TypeScript** (planned) | Browsers only run JavaScript; React is the most widely used frontend library |
-| App type | **PWA** (Progressive Web App) | One codebase that runs in any browser and installs on the iPhone home screen. No App Store needed |
+| Frontend | **React + TypeScript**, built with **Vite** | Browsers only run JavaScript; React is the most widely used UI library, and TypeScript catches mistakes (a misspelled field, a missing prop) while typing. Vite creates the project in one command and reloads the page instantly on save |
+| Styling | **Plain CSS with variables** (design tokens) | Every colour is a variable defined once for light and once for dark, so dark mode needs no component changes. No CSS framework, so the look stays deliberate and the code stays readable |
+| Linting | **Oxlint** | Vite's default; fast, no setup |
+| App type | **PWA** (Progressive Web App), planned | One codebase that runs in any browser and installs on the iPhone home screen. No App Store needed |
 | Saving from other apps | **iOS Shortcut** | iOS doesn't let PWAs appear in the share sheet, but a Shortcut can, and it can call the API |
+
+## Design
+
+The look was agreed in a clickable mockup before any React was written, so colours, spacing and wording could change cheaply.
+
+- **Inspiration:** calm, editorial websites: warm neutrals, a serif for headings, tiny spaced-out uppercase labels, thin dividers with **+** to expand, rounded pill buttons, lots of empty space.
+- **Palette "Linen & Espresso":** linen background, warm-white cards, espresso text, cocoa accent, sand lines. Colour only carries meaning: **sage** means good news (fits budget, price dropped), **clay** means attention (over budget, errors). The dark version ("Espresso at night") is a warm brown-black, with each colour lightened just enough to stay readable.
+- **Type:** Cormorant Garamond (serif) for the title, headings and empty states; DM Sans for everything else. Numbers use DM Sans with **tabular figures**, so prices line up in a column. The **₹** is drawn smaller and softer than the digits, so "₹557" reads as an amount rather than one long shape.
+- **Motion:** the tab underline glides, lists fade in, rows open smoothly, buttons press slightly. Everything turns off for people who ask their device for reduced motion.
+- **Decisions from using it:**
+  - No duplicate controls: the theme lives only in the header and the budget only on its card. Settings keeps just the API key and server address.
+  - Delete needs two taps.
+  - The budget label reads "Left after wish list", not "Left this month", because it subtracts what you *plan* to buy.
+  - A "below MRP" savings line was tried and removed for being confusing.
 
 ## Challenges and how they were solved
 
@@ -189,11 +222,36 @@ A single `status` column only knows where an item is *now*. Once something moved
 
 **Result:** sharing a product from the Amazon app saved it with the exact variant's title, price (₹237), MRP (₹279), image and cleaned link, without the server ever contacting Amazon. Littlebox (₹699, read from the phone's page alone) and Savana (₹318, via Copy Link) work through the same Shortcut.
 
+### 11. Amazon blocked the laptop too
+
+**Symptom:** pasting an Amazon link into the web app saved an item named after its own URL, with no price.
+
+**Cause:** the paste box uses `/items/from-link`, where the **server** fetches the page. After two days of testing and refreshing from the same network, Amazon started answering with a bot-check page.
+
+**What I did:**
+- **Researched how price-comparison sites cope.** Most use official affiliate data feeds (Amazon's Product Advertising API needs an approved Associates account), feeds that stores send them, or **browser extensions that read the page the shopper is already viewing**. The last is the same pattern as the phone path.
+- **Ruled out** rotating proxies and CAPTCHA-solving services: they go against store terms and break whenever detection changes.
+- **Made failure graceful:** the row shows the backend's actual error and offers a box to type the price (stored as `manual_price`, which the budget already used). The paste box warns that Amazon works best through the phone.
+- **Planned:** a browser extension, so the laptop gets the same "fetch as the user" path as the phone.
+
+### 12. Files that worked on Windows but would break when deployed
+
+Windows treats `Api.ts` and `api.ts` as the same file, while Linux (where deployment builds run) does not. Twice a file was saved with the wrong capitals (`Api.ts`, `Usetheme.ts`), and everything still worked locally. **Fix:** rename with `git mv` in two steps (`Usetheme.ts → useTheme_tmp.ts → useTheme.ts`), because both Windows and git can miss a change that is only in capitals. **Convention adopted:** component files are PascalCase (`ItemRow.tsx`), everything else lowercase (`api.ts`).
+
+### 13. Saved changes that never reached the browser
+
+Vite watches every file and updates the page on save. Once, Windows had a file locked at the moment Vite started watching it (`EBUSY: resource busy or locked`), so Vite silently stopped watching that file and the browser kept showing the old version. **Fix:** restart `npm run dev`. Lesson: if a saved change doesn't appear and the terminal shows no `hmr update` line for that file, restart the dev server.
+
+### 14. `localhost` is not `127.0.0.1` to a browser
+
+The backend's CORS setting allows `http://localhost:5173`. Opening the app as `http://127.0.0.1:5173` makes the browser treat it as a different website and block every request, which the app can only report as "Can't reach the server". **Rule:** open the app at `localhost`, and add any other address (such as the laptop's Wi-Fi IP, for testing on the phone) to `ONTRACK_CORS_ORIGINS`.
+
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
 - **The server's `/refresh` still includes Amazon links.** That's fine from a home connection, but once deployed it would send Amazon requests from a datacenter. Planned fix at deployment: `/refresh` skips Amazon, which the phone handles.
 - **Two taps to refresh everything:** the Shortcut for Amazon, `/refresh` for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
+- **Amazon links pasted into the web app** are fetched by the server and may be blocked. Use the phone Shortcut, or type the price into the row. The browser extension will fix this on the laptop.
 - **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
 
 ## Store support
@@ -231,6 +289,30 @@ pytest -q
 uvicorn main:app --reload
 ```
 Open http://127.0.0.1:8000/docs to try every endpoint in the browser.
+
+### The web app
+
+Requires Node.js 18+ (LTS). In a second terminal, from the top `OnTrack` folder:
+
+```powershell
+cd frontend
+npm install
+```
+
+Create `frontend/.env.local` (git-ignored) so the app knows where the server is during development:
+
+```
+VITE_API_URL=http://127.0.0.1:8000
+VITE_API_KEY=<the same key as backend/.env>
+```
+
+Then, with the backend running:
+
+```powershell
+npm run dev
+```
+
+Open **http://localhost:5173** (`localhost`, not `127.0.0.1`, because CORS only allows `localhost`). `.env.local` is for development only: Vite copies its values into the built app, so a real deployment must not contain the key there. The app's Settings panel stores the key and server address in the browser instead.
 
 Try the extractor on its own:
 ```powershell
@@ -309,7 +391,28 @@ OnTrack/
 │   ├── tests/             offline tests (fake pages, fake extractor), 37 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
-└── frontend/              (coming next)
+└── frontend/
+    ├── index.html             the single HTML page (fonts, theme colour)
+    ├── .env.local             dev server address + key (git-ignored)
+    └── src/
+        ├── main.tsx           entry point: draws <App /> into the page
+        ├── App.tsx            loads /summary, owns the tab, handles button presses
+        ├── api.ts             every request to the backend
+        ├── types.ts           shapes of the data the backend sends
+        ├── format.ts          store names and short dates
+        ├── index.css          design tokens (light + dark), layout, components
+        ├── hooks/
+        │   └── useTheme.ts    light / dark / follow the device
+        └── components/
+            ├── BudgetCard.tsx     budget, bar, totals, in-card budget editing
+            ├── Price.tsx          every ₹ amount, drawn the same way
+            ├── AddLink.tsx        paste-a-link box
+            ├── Tabs.tsx           Wish list · Later · Bought · All
+            ├── ItemList.tsx       the rows for the current tab
+            ├── ItemRow.tsx        one expandable row, its actions, the price box
+            ├── Thumb.tsx          product photo or a letter
+            ├── SettingsSheet.tsx  API key and server address
+            └── Icons.tsx          moon, sun, sliders, close
 ```
 
 ## Roadmap
@@ -326,7 +429,10 @@ OnTrack/
 - [ ] One-tap refresh: the Shortcut also triggers the server's `/refresh` for other stores
 - [ ] Daily automatic refresh with an iOS Automation (after deployment, so it works on any network)
 - [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
-- [ ] React + TypeScript PWA frontend
+- [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
+- [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
+- [ ] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`
+- [ ] Installable PWA (home-screen icon, app name, offline shell)
 - [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
@@ -354,3 +460,11 @@ OnTrack/
 - Built phone-side price refresh: `GET /refresh/phone-list`, `POST /links/{id}/from-html`, a shared cooldown helper, and the "Refresh OnTrack" Shortcut with a loop over due Amazon links
 - Debugged a 400 on upload by reproducing it locally (1 MB form-field limit) and fixed the Shortcut to send a File
 - Tested the Shortcuts from office Wi-Fi as well as home. 37 tests passing
+- Started the frontend on `feature/frontend`: installed Node.js, chose the design (palette, type, motion, light/dark) and agreed it in a clickable mockup before writing React
+- Built the app in small commits: Vite scaffold → design tokens and layout → API client and types → budget card → tabs and rows with product photos → row actions → settings and theme toggle
+- Refined from use: in-card budget editing, removed duplicate controls, clearer labels, removed a confusing savings line
+- Fixed file-name casing that only worked on Windows (`git mv` in two steps), and a Vite watcher that silently stopped watching a locked file
+
+**2026-10-07**
+- Added the paste-a-link box
+- Hit Amazon's bot-check from the laptop; researched how price-comparison sites get data; made failures graceful (real error in the row, type the price by hand, Amazon hint); planned a browser extension as the laptop version of the phone path
