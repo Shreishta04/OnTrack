@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { addFromLink } from '../api'
 import type { Item } from '../types'
+import { isAmazon } from '../format'
 
 interface AddLinkProps {
   onAdded: (item: Item) => Promise<void>
@@ -21,7 +22,9 @@ export default function AddLink({ onAdded }: AddLinkProps) {
       const item = await addFromLink(link)
       setUrl('')
       setMessage(
-        item.needs_price
+        item.needs_price && isAmazon(item.links[0]?.url)
+          ? { text: 'Added, but Amazon hid the details. Tap Refresh OnTrack on your iPhone to fill them in.', tone: 'warn' }
+          : item.needs_price
           ? { text: `Added “${item.name}”, but couldn't read its price.`, tone: 'warn' }
           : { text: `Added “${item.name}”.`, tone: 'muted' },
       )
@@ -56,7 +59,7 @@ export default function AddLink({ onAdded }: AddLinkProps) {
           {message.text}
         </p>
       ) : (
-        <p className="budget-note">Or share from any app with the “Add to OnTrack” Shortcut.</p>
+        <p className="budget-note">Or share from any app with the “Add to OnTrack” Shortcut. For Amazon, sharing from the iPhone works best.</p>
       )}
     </section>
   )

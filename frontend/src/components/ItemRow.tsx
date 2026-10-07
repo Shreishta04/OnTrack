@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Item, Status } from '../types'
-import { shortDate, storeName } from '../format'
+import { problemText, shortDate, storeName, stuckTip } from '../format'
 import Price from './Price'
 import Thumb from './Thumb'
 
@@ -50,6 +50,8 @@ export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
   const shownPrice = bought ? item.purchased_price : item.price
   const showMrp = !bought && item.mrp != null && item.price != null && item.mrp > item.price
   const badge = badgeFor(item)
+  const reason = item.needs_price ? problemText(item) : null
+  const typed = item.best_link_id == null && item.manual_price != null // price came from you, not a store
   const link = item.links.find((l) => l.id === item.best_link_id) ?? item.links[0]
   const drop =
     !bought && link?.price_when_saved != null && item.price != null && link.price_when_saved > item.price
@@ -59,7 +61,8 @@ export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
   return (
     <div className={open ? 'row open' : 'row'}>
       <button className="row-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Thumb src={item.image} name={item.name} />
+        {/* An item still named after its URL would show "H" (from https), so use the store's letter */}
+        <Thumb src={item.image} name={item.name.startsWith('http') ? storeName(item) : item.name} />
 
         <div className="row-text">
           <div className="row-name">{item.name}</div>
@@ -96,8 +99,17 @@ export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
               Paid <Price amount={item.purchased_price} /> on {shortDate(item.purchased_at)} · saved to your list{' '}
               {shortDate(item.created_at)}
             </p>
-          ) : item.needs_price ? (
-            <p>{storeName(item)} · no price yet, you can add one by hand</p>
+                    ) : item.needs_price ? (
+            <>
+              {reason && <p className="row-reason">{reason}</p>}
+              <p>{stuckTip(item)}</p>
+            </>
+          ) : typed ? (
+            <p>
+              {item.links.length > 0 && <>{storeName(item)} · </>}
+              <Price amount={item.price} /> <span className="typed">typed by you</span> · saved{' '}
+              {shortDate(item.created_at)}
+            </p>
           ) : (
             <p>
               {storeName(item)} · <Price amount={item.price} /> now

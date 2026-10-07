@@ -587,6 +587,12 @@ input {
 .drop {
   color: var(--good);
 }
+.row-reason {
+  color: var(--warn);
+}
+.typed {
+  font-style: italic;
+}
 .row-link {
   align-self: flex-start;
   margin-top: 4px;

@@ -19,6 +19,32 @@ export function storeName(item: Item): string {
   return base.charAt(0).toUpperCase() + base.slice(1)
 }
 
+export function isAmazon(url: string | undefined): boolean {
+  return !!url && /amazon\.|amzn\./.test(url)
+}
+
+// Why an item has no price, in plain words (null if nothing went wrong).
+// Raw errors like "Network error: Timeout: Failed to perform, curl: (28)…"
+// are turned into a sentence; our own messages are already readable.
+export function problemText(item: Item): string | null {
+  const error = item.links.find((l) => l.last_error)?.last_error
+  if (!error) return null
+  if (error.startsWith('Network error')) {
+    return /time(d)? ?out/i.test(error) ? 'The store took too long to answer.' : "Couldn't reach the store."
+  }
+  const http = error.match(/HTTP (\d+)/)
+  if (http) return `The store refused to show the page (error ${http[1]}).`
+  return error
+}
+
+// What you can do about an item with no price.
+export function stuckTip(item: Item): string {
+  if (isAmazon(item.links[0]?.url)) {
+    return 'Tap Refresh OnTrack on your iPhone, or share this product from there: the name, photo and price fill in by themselves.'
+  }
+  return 'OnTrack will try again on the next refresh. Or delete it and use Add by hand with your own price.'
+}
+
 // "2026-10-05T11:56:46+00:00" → "5 Oct"
 export function shortDate(iso: string | null): string {
   if (!iso) return ''
