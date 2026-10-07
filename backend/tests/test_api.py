@@ -335,3 +335,17 @@ def test_each_request_is_logged_when_it_starts(client, caplog):
         client.get("/summary", headers=H)
     assert "started  GET /summary" in caplog.text
 
+
+
+def test_phone_list_includes_links_with_no_price_even_if_just_checked(client):
+    """If the server's own attempt failed (Amazon's bot-check), the link has no
+    price. The phone should get it on the very next refresh, not an hour later."""
+    client.catalogue["https://www.amazon.in/dp/B0BOTCHECK"] = Product(
+        url="https://www.amazon.in/dp/B0BOTCHECK", method="amazon",
+        error="Amazon showed a bot-check page instead of the product.")
+    stuck = client.post("/items/from-link", json={"url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H).json()
+    client.post("/items/from-link", json={"url": "https://amzn.in/d/watch"}, headers=H)   # has a price
+
+    due = client.get("/refresh/phone-list", headers=H).json()      # both were checked seconds ago
+    assert [d["link_id"] for d in due] == [stuck["links"][0]["id"]]   # only the one without a price
+

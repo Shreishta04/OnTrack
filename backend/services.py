@@ -150,7 +150,7 @@ def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
     final_url, p = _fetch_link(conn, url, extract_fn)
     _save_link(conn, item_id, final_url, p)
     conn.commit()
-    
+
 
 def create_manual_item(conn, name: str, price: float | None, note: str | None = None,
                        priority: int = 0) -> int:
@@ -357,13 +357,15 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
             "changed": changes, "failed": failed}
 
 def phone_refresh_list(conn, force: bool = False) -> list[dict]:
-    """Amazon links the phone should re-download: not bought, and due for a check."""
+    """Amazon links the phone should re-download: not bought, and either due for
+    a check or still without a price. A link with no price skips the cooldown:
+    a failed attempt (e.g. a bot-check page) shouldn't make us wait an hour."""
     rows = conn.execute(
-        "SELECT links.id, links.url, links.last_checked FROM links "
+        "SELECT links.id, links.url, links.price, links.last_checked FROM links "
         "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' ORDER BY links.id"
     ).fetchall()
     return [{"link_id": r["id"], "url": r["url"]} for r in rows
-            if _is_amazon(r["url"]) and _is_due(r["last_checked"], force)]
+            if _is_amazon(r["url"]) and (r["price"] is None or _is_due(r["last_checked"], force))]
 
 
 def refresh_link_from_html(conn, link_id: int, html: str) -> dict:
