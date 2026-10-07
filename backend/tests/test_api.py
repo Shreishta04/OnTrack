@@ -324,3 +324,14 @@ def test_database_not_locked_while_store_page_downloads(client, tmp_path):
     assert r.status_code == 201
     assert r.json()["name"] == "Slow Store Lamp"
     assert results == ["write worked"]
+
+
+
+def test_each_request_is_logged_when_it_starts(client, caplog):
+    """Uvicorn only prints a request when it finishes, so a stuck one is invisible.
+    We print a 'started' line first, so the terminal always shows what's running."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        client.get("/summary", headers=H)
+    assert "started  GET /summary" in caplog.text
+

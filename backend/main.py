@@ -8,8 +8,10 @@ Then open http://127.0.0.1:8000/docs to try every endpoint in the browser.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -46,6 +48,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Uvicorn prints a request's line only when it FINISHES. A request that gets
+# stuck never shows up, so the terminal looks silent. Printing when each request
+# STARTS (and how long slow ones took) makes a stuck request easy to spot.
+log = logging.getLogger("uvicorn.error")   # the logger uvicorn already prints to
+SLOW_REQUEST_SECONDS = 2
+
+
+@app.middleware("http")
+async def log_request_start(request: Request, call_next):
+    start = time.monotonic()
+    log.info("started  %s %s", request.method, request.url.path)
+    response = await call_next(request)
+    took = time.monotonic() - start
+    if took >= SLOW_REQUEST_SECONDS:
+        log.info("slow     %s %s took %.1f s", request.method, request.url.path, took)
+    return response
 
 
 # --------------------------------------------------------------- dependencies
