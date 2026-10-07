@@ -36,7 +36,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **One item, several stores:** e.g. the same watch on Amazon and Fastrack. Only the **cheapest** link counts toward the budget, so items are never counted twice
 - **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected. Amazon, Savana and Flipkart links are reduced to just the part that identifies the product
 - **Stuck links get rescued:** if a store blocked the first try, adding the same link again (for example from the phone) fills in the existing item's name, price and photo instead of saying "already saved"
-- **Manual items** for anything without a usable link
+- **Add by hand:** a name, a price and an optional link, for anything a store won't let us read or that isn't sold online. The link is saved **without contacting the store**; with one, Refresh later brings in the store's price and photo (the store's price replaces mine, which is kept as a backup, and my name stays). Without one, my price stays as typed. Rows show *typed by you* so typed prices are never mistaken for store prices
 
 **Lists and buying**
 - Every item is in one of three lists: **planned** (wish list, counts toward the budget), **later** (parked, not counted), **purchased** (bought)
@@ -54,8 +54,9 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
 - **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a status badge (Fits budget / Over budget / Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
 - **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
-- **Paste a link** to add an item from the laptop
-- **When a store won't give a price,** the row shows *Needs a price*. *Planned:* show the real reason (for example *"Amazon showed a bot-check page"*) and a box to type the price by hand. This was designed, but the work was never committed (see Challenge 11)
+- **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone
+- **When a store won't give a price,** the row says **why** in plain words (*"Amazon showed a bot-check page…"*, *"The store took too long to answer."* instead of raw `curl` errors) and **what to do**: for Amazon, tap *Refresh OnTrack* on the iPhone or share it from there, and the name, photo and price fill in by themselves
+- **Placeholder letters:** items without a photo show their first letter; an item still named after its link shows the **store's** letter (A for Amazon) instead of "H" from *https*
 - **Light and dark mode:** follows the device until you tap the moon/sun button, then remembers your choice
 - **Works on laptop and phone:** two columns on a laptop, one on a phone, with no separate phone code
 
@@ -303,6 +304,26 @@ The backend's CORS setting allows `http://localhost:5173`. Opening the app as `h
 
 Setting up the backend from scratch (`pip install -r requirements.txt`) crashed before any test ran: *Form data requires "python-multipart"*. My own venv had it installed by hand, so I never noticed. **Fix:** added it to `requirements.txt`. A deployment server would have hit the same crash.
 
+### 20. Typing a price wasn't enough
+
+**Symptom:** the plan was a "type the price" box inside each stuck row. Looking at the mockup, I realised that when Amazon blocks us we get **only the link**: no name, no photo, no price. A typed price on a row called `https://www.amazon.in/dp/…` is half a fix.
+
+**What I chose instead:**
+- Stuck rows **explain themselves**: the real reason, and the fix that actually works. After the backend fixes, a blocked Amazon row is a placeholder the phone completes with one tap.
+- A separate **Add by hand** card (name, price, optional link) for whatever the phone can't fix, or things that aren't sold online at all.
+
+**Decisions:** the link is optional (the budget is about everything I plan to buy, not only online shopping); when a store price arrives it replaces my typed one (on a wish list the store's current price is the truth); the price is required.
+
+### 21. A short link added by hand would have become a duplicate
+
+**Symptom:** testing Add by hand with an Alexa link copied from the Amazon app, the saved link was `https://amzn.in/d/0ahlEBRm`, Amazon's **short** link.
+
+**Cause:** adding by hand never contacts the store (on purpose), so nothing ever followed the short link to the real `amazon.in/dp/…` page. Sharing the same Echo Dot later would arrive as `/dp/…`, not match, and be saved twice.
+
+**Fix:** whenever a check successfully reads a page, the link's address is updated to the page's real, cleaned address (from its canonical tag), unless another link already has it. Refresh fixed the Alexa link by itself. A test replays it: short link → phone refresh → `/dp/` address → sharing again says "already saved".
+
+**A slip worth remembering:** while pasting this change I replaced three lines instead of adding after them, and deleted the line that saves price history. Three existing tests about history failed straight away, which is exactly what they're for. Habit since: `git diff` before every commit, and look at every `-` line.
+
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
@@ -314,6 +335,16 @@ Setting up the backend from scratch (`pip install -r requirements.txt`) crashed 
 - **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
 - **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
+- **The web app doesn't notice Shortcut refreshes:** after *Refresh OnTrack* runs on the phone, the page shows the old prices until it's reloaded. Planned with the refresh button: reload whenever the app's tab comes back into view.
+
+### Found while using it, to fix later
+
+Small things I noticed while testing that don't block anything yet:
+
+- **Long amounts overflow the budget card.** A budget in crores (₹1,23,88,844 while testing) pushes the big number and the totals past the card's edge. Planned fix: smaller font for long amounts (tried and working in a test build; parked to keep this branch small).
+- **"WISH LIST" wraps onto two lines** on the phone, while the other tabs fit on one.
+- **Filling in a stuck link answers `201 Created`** although nothing new is created. Nothing reads the code today.
+- **Test client warning** (`StarletteDeprecationWarning`, wants `httpx2`): harmless for now.
 
 ## Store support
 
@@ -438,7 +469,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `GET` | `/items/{id}/history` | Every price check for the item's links, oldest first |
 | `POST` | `/items/from-link` | Save an item from a link (the server fetches the page). A link already saved **without** a price is filled in instead of rejected |
 | `POST` | `/items/from-html` | Save an item from a page the phone already fetched (form: `url` + `html` file); non-Amazon pages without a price fall back to a server fetch |
-| `POST` | `/items` | Save a manual item (name + price) |
+| `POST` | `/items` | Add by hand: name + price, optional `url` (saved without contacting the store; Refresh can fill in the store's price later) |
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
 | `DELETE` | `/items/{id}` · `/links/{id}` | Remove an item or a link |
@@ -456,7 +487,7 @@ OnTrack/
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 44 passing
+│   ├── tests/             offline tests (fake pages, fake extractor), 47 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -467,7 +498,7 @@ OnTrack/
         ├── App.tsx            loads /summary, owns the tab, handles button presses
         ├── api.ts             every request to the backend
         ├── types.ts           shapes of the data the backend sends
-        ├── format.ts          store names and short dates
+        ├── format.ts          store names, short dates, plain-words errors and tips
         ├── index.css          design tokens (light + dark), layout, components
         ├── hooks/
         │   └── useTheme.ts    light / dark / follow the device
@@ -475,9 +506,10 @@ OnTrack/
             ├── BudgetCard.tsx     budget, bar, totals, in-card budget editing
             ├── Price.tsx          every ₹ amount, drawn the same way
             ├── AddLink.tsx        paste-a-link box
+            ├── AddByHand.tsx      name, optional link, price
             ├── Tabs.tsx           Wish list · Later · Bought · All
             ├── ItemList.tsx       the rows for the current tab
-            ├── ItemRow.tsx        one expandable row, its actions, the price box
+            ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
             ├── Thumb.tsx          product photo or a letter
             ├── SettingsSheet.tsx  API key and server address
             └── Icons.tsx          moon, sun, sliders, close
@@ -499,11 +531,12 @@ OnTrack/
 - [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
 - [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
 - [x] Backend fixes from phone testing: no database lock during downloads, 25 s limit per add, request-start logging, stuck links rescued (share again or Refresh), Flipkart duplicates
-- [ ] Rebuild the "Needs a price" fallback: the real error, a box to type the price, the Amazon hint
+- [x] Stuck rows explain why and how to fix them; Add by hand (name, price, optional link); typed prices labelled; store letters; short links corrected after a check
+- [ ] Refresh button in the header (↻), and reload when the app's tab comes back into view
 - [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
 - [ ] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`
 - [ ] Installable PWA (home-screen icon, app name, offline shell)
-- [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon
+- [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon; refresh non-Amazon prices when the app opens
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [ ] Rethink "Over budget" (each item on its own, or in priority order?)
@@ -550,3 +583,6 @@ OnTrack/
 - Investigated "the server freezes": reproduced it with a fake store that never answers, found the database write lock held during downloads, and decided against switching to Postgres for this
 - New branch `feature/backend-fixes`, one tested commit per step: fetch before writing, a 25 s limit per add, request-start logging, Amazon links without a price always in the phone's refresh list, re-adding a stuck link fills it in, `python-multipart` in requirements, Flipkart link cleaning, and real names for URL-named items after any check. 44 tests passing
 - Phone round on the real app: Refresh rescued the stuck Amazon item, the sneakers' third share said "already saved", every request now logs when it starts
+- Planned the "Needs a price" fallback with a mockup built from the app's real stylesheet; realised a price box alone doesn't help when Amazon hides everything, and changed the plan
+- `feature/add-by-hand`: `POST /items` takes an optional link (saved without contacting the store), an Add by hand card, stuck rows that explain why and what to do, "typed by you" labels, store letters instead of "H", and short links corrected after a check. 47 tests passing
+- Phone round: Add by hand with and without a link, the number keyboard, duplicates refused; Refresh renamed the long-stuck Amazon row to its real product and replaced my typed Alexa price with Amazon's. Refresh also caught real price changes (Apple Watch ₹40,990 → ₹35,509)

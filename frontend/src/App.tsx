@@ -9,6 +9,7 @@ import SettingsSheet from './components/SettingsSheet'
 import { MoonIcon, SlidersIcon, SunIcon } from './components/Icons'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
+import AddByHand from './components/AddByHand'
 
 export default function App() {
   const [summary, setSummary] = useState<Summary | null>(null)
@@ -53,6 +54,10 @@ export default function App() {
     purchased: items.filter((i) => i.status === 'purchased').length,
     all: items.length,
   }
+  async function showNewItem() {
+    setTab('planned')
+    await load()
+  }
   const visible = tab === 'all' ? items : items.filter((i) => i.status === tab)
 
   return (
@@ -81,14 +86,8 @@ export default function App() {
           {error && <p className="notice notice-error">{error}</p>}
           {!error && !summary && <p className="notice">Loading…</p>}
           {summary && <BudgetCard summary={summary} onBudgetSaved={load} />}
-          {summary && (
-            <AddLink
-              onAdded={async () => {
-                setTab('planned') // new items start on the wish list, so show it
-                await load()
-              }}
-            />
-          )}
+          {summary && <AddLink onAdded={showNewItem} />}
+          {summary && <AddByHand onAdded={showNewItem} />}
         </aside>
 
         <main className="main">

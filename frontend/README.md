@@ -62,7 +62,7 @@ src/
 ├── App.tsx            loads /summary, owns the current tab, handles button presses
 ├── api.ts             every request to the backend (key, JSON, friendly errors)
 ├── types.ts           TypeScript shapes of the data the backend sends
-├── format.ts          store names ("Amazon") and short dates ("5 Oct")
+├── format.ts          store names ("Amazon"), short dates ("5 Oct"), plain-words errors and tips
 ├── index.css          design tokens (light + dark), layout and component styles
 ├── hooks/
 │   └── useTheme.ts    light / dark / follow the device, remembered in the browser
@@ -70,9 +70,10 @@ src/
     ├── BudgetCard.tsx     big "left" number, bar, totals, in-card budget editing
     ├── Price.tsx          every ₹ amount, drawn the same way
     ├── AddLink.tsx        paste-a-link box
+    ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
     ├── Tabs.tsx           Wish list · Later · Bought · All, sliding underline
     ├── ItemList.tsx       the rows for the current tab, or an empty message
-    ├── ItemRow.tsx        one expandable row: details and actions
+    ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── SettingsSheet.tsx  API key and server address
     └── Icons.tsx          small line icons
@@ -86,6 +87,8 @@ src/
 - **Colours:** never written in components. Every colour is a CSS variable in `index.css` (`--accent`, `--warn`, …), defined once for light and once for dark.
 - **Money:** always shown with `<Price amount={…} />`, which draws the small ₹ and tabular digits.
 - **Forms:** every form handler starts with `e.preventDefault()`, so the browser doesn't reload the page.
+- **Typed amounts:** forms accept what people actually type ("1,500", "₹1299"): strip ₹, commas and spaces, then check with `Number.isFinite`.
+- **Errors shown to people:** never raw library text. `problemText()` in `format.ts` turns stored errors into a sentence, and `api.ts` does the same for request errors.
 
 ## Troubleshooting
 

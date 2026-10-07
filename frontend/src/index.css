@@ -587,6 +587,12 @@ input {
 .drop {
   color: var(--good);
 }
+.row-reason {
+  color: var(--warn);
+}
+.typed {
+  font-style: italic;
+}
 .row-link {
   align-self: flex-start;
   margin-top: 4px;
@@ -760,4 +766,37 @@ input {
 }
 .add-msg.is-warn {
   color: var(--warn);
+}
+
+
+
+/* ============================================================
+   Add by hand
+   ============================================================ */
+
+.hand-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.hand-row {
+  display: flex;
+  gap: 10px;
+}
+.price-field {
+  position: relative;
+  flex: 0 1 150px;
+  min-width: 110px;
+}
+.price-field .field {
+  padding-left: 34px;
+}
+.cur-in {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 14px;
+  pointer-events: none;
 }

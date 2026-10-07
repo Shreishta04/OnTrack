@@ -415,3 +415,69 @@ def test_refresh_gives_a_url_named_item_its_real_name(client):
 
     assert client.get(f"/items/{stuck['id']}", headers=H).json()["name"] == "Gold Mesh Watch"
     assert client.get(f"/items/{renamed['id']}", headers=H).json()["name"] == "My watch"   # your own name stays
+
+
+
+def test_add_by_hand_with_a_link_is_filled_in_later_by_refresh(client):
+    """Adding by hand saves your name and price, and the link WITHOUT contacting
+    the store. Refresh can then fetch the store's price and photo; the store's
+    price replaces yours, but the name you typed stays."""
+    def never_called(url):
+        raise AssertionError("adding by hand must not contact the store")
+    main.app.dependency_overrides[main.get_extract] = lambda: never_called
+
+    r = client.post("/items", json={"name": "Rose gold watch", "price": 40000,
+                                    "url": "https://www.amazon.in/Apple-Watch/dp/B0BOTCHECK?ref=xyz"}, headers=H)
+    assert r.status_code == 201
+    item = r.json()
+    assert item["price"] == 40000 and not item["needs_price"]              # typed price counts now
+    assert item["links"][0]["url"] == "https://www.amazon.in/dp/B0BOTCHECK"  # cleaned, not fetched
+    assert item["links"][0]["price"] is None
+
+    due = client.get("/refresh/phone-list", headers=H).json()             # no store price yet
+    assert [d["link_id"] for d in due] == [item["links"][0]["id"]]
+
+    page = ('<html><body><span id="productTitle">Apple Watch Series 11</span>'
+            '<img id="landingImage" src="https://m.media-amazon.com/w.jpg">'
+            '<div class="priceToPay"><span class="a-offscreen">₹38,990</span></div></body></html>')
+    client.post(f"/links/{due[0]['link_id']}/from-html", files={"html": ("p.html", page, "text/html")}, headers=H)
+
+    item = client.get(f"/items/{item['id']}", headers=H).json()
+    assert item["price"] == 38990                     # the store's price wins
+    assert item["manual_price"] == 40000              # yours is kept as a backup
+    assert item["name"] == "Rose gold watch"          # your name stays
+    assert item["image"] == "https://m.media-amazon.com/w.jpg"
+
+    again = client.post("/items", json={"name": "Watch again", "price": 1,
+                                        "url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H)
+    assert again.status_code == 409                   # same link: already saved
+
+
+def test_add_by_hand_without_a_link_still_works(client):
+    item = client.post("/items", json={"name": "Gift", "price": 2000}, headers=H).json()
+    assert item["price"] == 2000 and item["links"] == []
+
+
+
+def test_short_link_added_by_hand_becomes_the_real_link_after_a_check(client):
+    """Adding by hand never contacts the store, so an amzn.in short link stays
+    short. Once Refresh reads the page, the link should become the real
+    /dp/ address, so sharing the same product later says 'already saved'."""
+    item = client.post("/items", json={"name": "Alexa", "price": 2555,
+                                       "url": "https://amzn.in/d/0ahlEBRm"}, headers=H).json()
+    link_id = item["links"][0]["id"]
+    assert item["links"][0]["url"] == "https://amzn.in/d/0ahlEBRm"            # nothing followed yet
+
+    page = ('<html><head><link rel="canonical" href="https://www.amazon.in/Echo-Dot/dp/B0ECHODOT5"/></head>'
+            '<body><span id="productTitle">Amazon Echo Dot (5th Gen)</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹4,499</span></div></body></html>')
+    upload = {"html": ("p.html", page, "text/html")}
+    client.post(f"/links/{link_id}/from-html", files=upload, headers=H)
+
+    item = client.get(f"/items/{item['id']}", headers=H).json()
+    assert item["links"][0]["url"] == "https://www.amazon.in/dp/B0ECHODOT5"  # the real address now
+    assert item["name"] == "Alexa" and item["price"] == 4499
+
+    again = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0ECHODOT5"},
+                        files=upload, headers=H)
+    assert again.status_code == 409                                          # recognised as a duplicate

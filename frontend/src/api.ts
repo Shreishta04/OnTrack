@@ -48,6 +48,11 @@ export const getSummary = () => request<Summary>('/summary')
 export const addFromLink = (url: string) =>
   request<Item>('/items/from-link', { method: 'POST', body: JSON.stringify({ url }) })
 
+// Add by hand: a name and a price, and optionally a store link (saved
+// without contacting the store; Refresh can fill in the store's price later).
+export const addManual = (name: string, price: number, url?: string) =>
+  request<Item>('/items', { method: 'POST', body: JSON.stringify(url ? { name, price, url } : { name, price }) })
+
 export const patchItem = (id: number, fields: { status?: Status; name?: string; purchased_price?: number }) =>
   request<Item>(`/items/${id}`, { method: 'PATCH', body: JSON.stringify(fields) })
 

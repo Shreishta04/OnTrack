@@ -93,6 +93,14 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
         conn.execute(
             "INSERT INTO price_history (link_id, price, mrp, checked_at) VALUES (?, ?, ?, ?)",
             (link_id, p.price, p.mrp, now()))
+        # A link saved by hand may be a short link (amzn.in/d/…) we never
+        # followed. Once a page is read, store its real, cleaned address, so
+        # the duplicate check recognises the product when it's shared again.
+        real_url = clean_url(p.url)
+        conn.execute(
+            "UPDATE links SET url = ? WHERE id = ? AND url != ? "
+            "AND NOT EXISTS (SELECT 1 FROM links WHERE url = ?)",
+            (real_url, link_id, real_url, real_url))
     else:
         # Keep the last known price; just note that this attempt failed.
         conn.execute(
@@ -191,13 +199,23 @@ def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
 
 
 def create_manual_item(conn, name: str, price: float | None, note: str | None = None,
-                       priority: int = 0) -> int:
+                       priority: int = 0, url: str | None = None) -> int:
+    """An item you type in yourself. The optional link is saved WITHOUT
+    contacting the store (the point of adding by hand is that the store
+    blocked us). It starts with no store price, so Refresh picks it up later,
+    and once the store's price arrives it replaces the typed one."""
+    link_url = clean_url(url) if url else None
+    if link_url and (known := _known_link(conn, link_url)):
+        raise Duplicate(known["item_id"])     # already saved, even if still stuck
+
     cur = conn.execute(
         "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?)",
         (name, price, note, priority, now()))
-    conn.commit()
     item_id = cur.lastrowid
     _log_status(conn, item_id, None, "planned")
+    if link_url:
+        conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
+                     (item_id, link_url, now()))
     conn.commit()
     return item_id
 
