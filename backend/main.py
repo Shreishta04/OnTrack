@@ -129,6 +129,7 @@ class ManualItemIn(BaseModel):
     price: float | None = Field(None, ge=0, examples=[1500])
     note: str | None = None
     priority: int = 0
+    url: HttpUrl | None = None      # optional store link, saved without contacting the store
 
 
 class LinkIn(BaseModel):
@@ -208,8 +209,9 @@ def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
 
 @app.post("/items", status_code=201, dependencies=auth)
 def post_manual(body: ManualItemIn, conn=Depends(get_db)):
-    """An item with a typed price and no link (e.g. a Come Again bracelet)."""
-    item_id = services.create_manual_item(conn, body.name, body.price, body.note, body.priority)
+    """An item you type in yourself: a name, a price, and optionally a store link."""
+    item_id = services.create_manual_item(conn, body.name, body.price, body.note, body.priority,
+                                          str(body.url) if body.url else None)
     return services.item_view(conn, item_id)
 
 

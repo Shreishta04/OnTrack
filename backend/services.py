@@ -191,13 +191,23 @@ def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
 
 
 def create_manual_item(conn, name: str, price: float | None, note: str | None = None,
-                       priority: int = 0) -> int:
+                       priority: int = 0, url: str | None = None) -> int:
+    """An item you type in yourself. The optional link is saved WITHOUT
+    contacting the store (the point of adding by hand is that the store
+    blocked us). It starts with no store price, so Refresh picks it up later,
+    and once the store's price arrives it replaces the typed one."""
+    link_url = clean_url(url) if url else None
+    if link_url and (known := _known_link(conn, link_url)):
+        raise Duplicate(known["item_id"])     # already saved, even if still stuck
+
     cur = conn.execute(
         "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?)",
         (name, price, note, priority, now()))
-    conn.commit()
     item_id = cur.lastrowid
     _log_status(conn, item_id, None, "planned")
+    if link_url:
+        conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
+                     (item_id, link_url, now()))
     conn.commit()
     return item_id
 
