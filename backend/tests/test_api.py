@@ -377,3 +377,18 @@ def test_adding_a_stuck_link_again_fills_it_in(client):
                         files={"html": ("p.html", page, "text/html")}, headers=H)
     assert again.status_code == 409
 
+
+
+def test_flipkart_links_keep_only_the_product_code():
+    """The same sneakers came in three ways (paste, clipboard, Share Sheet) with
+    different extras after '?', so they were saved three times. All must clean
+    to one link, so the duplicate check catches them."""
+    expected = "https://www.flipkart.com/reefox-stylish-orange-casual-sneakers-men/p/itmbab39913cc43f"
+    shared = ("https://www.flipkart.com/reefox-stylish-orange-casual-sneakers-men/p/itmbab39913cc43f"
+              "?pid=SHOHRN6Z7HSXACHE&lid=LSTSHOHRN6Z7HSXACHEQFSUQT&marketplace=FLIPKART"
+              "&store=osp%2Fcil&ctx=eyJkZWxpdmVyZWRCeSI6IiJ9&_appId=CL")
+    assert clean_url(shared) == expected
+    assert clean_url(expected) == expected                                        # already clean
+    assert clean_url("https://dl.flipkart.com/dl/reefox-stylish-orange-casual-sneakers-men"
+                     "/p/itmbab39913cc43f?pid=SHOHRN6Z7HSXACHE") == expected      # app deep link
+    assert clean_url("https://www.flipkart.com/guess-u0291g4m-analog-watch-men/p/itmf1ccbe064d497") != expected

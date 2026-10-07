@@ -35,6 +35,7 @@ TRACKING_PARAMS = re.compile(
 AMAZON_ASIN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
 CANONICAL_LINK = re.compile(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
 SAVANA_ID = re.compile(r"/details/(?:[^/?]*-)?(\d+)")
+FLIPKART_ITEM = re.compile(r"(/[^/]+/p/itm[0-9a-z]+)", re.I)   # /<name>/p/itm1bf2900f7d215
 
 @dataclass
 class Page:
@@ -130,6 +131,11 @@ def clean_url(url: str) -> str:
         vid = dict(parse_qsl(parts.query)).get("vid")
         query = urlencode({"vid": vid}) if vid else ""
         return urlunsplit(("https", "www.savana.com", f"/details/{m.group(1)}", query, ""))
+    if parts.netloc.endswith("flipkart.com") and (m := FLIPKART_ITEM.search(parts.path)):
+        # The itm… code identifies the product. Everything after "?" (pid, lid,
+        # marketplace, tracking) varies by where you shared from, so drop it.
+        # Sizes/colours of one product share the itm… code: they count as one item.
+        return urlunsplit(("https", "www.flipkart.com", m.group(1), "", ""))
     query = [(k, v) for k, v in parse_qsl(parts.query) if not TRACKING_PARAMS.match(k)]
     path = re.sub(r"/ref=[^/]*$", "", parts.path)   # Amazon's /ref=sr_1_19 suffix
     return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), ""))
