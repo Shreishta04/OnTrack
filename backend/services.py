@@ -98,6 +98,13 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
         conn.execute(
             "UPDATE links SET title = COALESCE(title, ?), last_checked = ?, last_error = ? WHERE id = ?",
             (p.title, now(), p.error, link_id))
+    if p.title:
+        # Items saved while nothing could be read are named after their URL.
+        # The first check that finds a real title renames them (names you
+        # typed yourself never start with "http", so they're left alone).
+        conn.execute(
+            "UPDATE items SET name = ? WHERE id = (SELECT item_id FROM links WHERE id = ?) "
+            "AND name LIKE 'http%'", (p.title, link_id))
 
 
 def _known_link(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
@@ -137,12 +144,9 @@ def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Produc
 
 
 def _fill_stuck_link(conn: sqlite3.Connection, stuck: sqlite3.Row, p: Product) -> int:
-    """Record a new attempt on a link that had no price. If the item is still
-    named after its URL (nothing could be read before), use the real title."""
+    """Record a new attempt on a link that had no price (_record_check also
+    gives the item its real name if it was still named after its URL)."""
     _record_check(conn, stuck["id"], p)
-    if p.title:
-        conn.execute("UPDATE items SET name = ? WHERE id = ? AND name LIKE 'http%'",
-                     (p.title, stuck["item_id"]))
     return stuck["item_id"]
 
 

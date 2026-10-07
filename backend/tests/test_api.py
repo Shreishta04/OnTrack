@@ -392,3 +392,26 @@ def test_flipkart_links_keep_only_the_product_code():
     assert clean_url("https://dl.flipkart.com/dl/reefox-stylish-orange-casual-sneakers-men"
                      "/p/itmbab39913cc43f?pid=SHOHRN6Z7HSXACHE") == expected      # app deep link
     assert clean_url("https://www.flipkart.com/guess-u0291g4m-analog-watch-men/p/itmf1ccbe064d497") != expected
+
+
+
+
+def test_refresh_gives_a_url_named_item_its_real_name(client):
+    """A stuck item is named after its URL. When the phone's Refresh finally
+    reads the page, the item should get the product's real name too, not just
+    the price and photo."""
+    client.catalogue["https://www.amazon.in/dp/B0BOTCHECK"] = Product(
+        url="https://www.amazon.in/dp/B0BOTCHECK", method="amazon",
+        error="Amazon showed a bot-check page instead of the product.")
+    stuck = client.post("/items/from-link", json={"url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H).json()
+    renamed = client.post("/items/from-link", json={"url": "https://amzn.in/d/watch", "name": "My watch"},
+                          headers=H).json()
+
+    page = ('<html><body><span id="productTitle">Gold Mesh Watch</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹1,999</span></div></body></html>')
+    upload = {"html": ("p.html", page, "text/html")}
+    client.post(f"/links/{stuck['links'][0]['id']}/from-html", files=upload, headers=H)
+    client.post(f"/links/{renamed['links'][0]['id']}/from-html", files=upload, headers=H)
+
+    assert client.get(f"/items/{stuck['id']}", headers=H).json()["name"] == "Gold Mesh Watch"
+    assert client.get(f"/items/{renamed['id']}", headers=H).json()["name"] == "My watch"   # your own name stays
