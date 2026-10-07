@@ -294,3 +294,124 @@ def test_phone_refresh_list_and_upload(client):
     item = client.get(f"/items/{item['id']}", headers=H).json()
     assert item["price"] == 1799 and item["links"][0]["lowest_price_seen"] == 1799
     assert client.post("/links/999/from-html", files=upload, headers=H).status_code == 404
+
+
+
+
+def test_database_not_locked_while_store_page_downloads(client, tmp_path):
+    """While we wait for a slow store, other changes (like editing the budget)
+    must still work. Before the fix, adding a link locked the database for the
+    whole download, and every other change failed with 'database is locked'."""
+    results = []
+
+    def slow_store(url):
+        # Pretend the store is still sending its page. Meanwhile, try a write
+        # from a second connection with no patience at all (timeout=0).
+        other = sqlite3.connect(tmp_path / "test.db", timeout=0)
+        try:
+            other.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('budget', '5000')")
+            other.commit()
+            results.append("write worked")
+        except sqlite3.OperationalError as exc:      # "database is locked"
+            results.append(str(exc))
+        finally:
+            other.close()
+        return Product(url=url, ok=True, title="Slow Store Lamp", price=999, method="json-ld")
+
+    main.app.dependency_overrides[main.get_extract] = lambda: slow_store
+    r = client.post("/items/from-link", json={"url": "https://slow.example/lamp"}, headers=H)
+
+    assert r.status_code == 201
+    assert r.json()["name"] == "Slow Store Lamp"
+    assert results == ["write worked"]
+
+
+
+def test_each_request_is_logged_when_it_starts(client, caplog):
+    """Uvicorn only prints a request when it finishes, so a stuck one is invisible.
+    We print a 'started' line first, so the terminal always shows what's running."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        client.get("/summary", headers=H)
+    assert "started  GET /summary" in caplog.text
+
+
+
+def test_phone_list_includes_links_with_no_price_even_if_just_checked(client):
+    """If the server's own attempt failed (Amazon's bot-check), the link has no
+    price. The phone should get it on the very next refresh, not an hour later."""
+    client.catalogue["https://www.amazon.in/dp/B0BOTCHECK"] = Product(
+        url="https://www.amazon.in/dp/B0BOTCHECK", method="amazon",
+        error="Amazon showed a bot-check page instead of the product.")
+    stuck = client.post("/items/from-link", json={"url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H).json()
+    client.post("/items/from-link", json={"url": "https://amzn.in/d/watch"}, headers=H)   # has a price
+
+    due = client.get("/refresh/phone-list", headers=H).json()      # both were checked seconds ago
+    assert [d["link_id"] for d in due] == [stuck["links"][0]["id"]]   # only the one without a price
+
+
+
+def test_adding_a_stuck_link_again_fills_it_in(client):
+    """The server hit Amazon's bot-check, so the item has no name or price.
+    Sharing the same link from the phone should fill in THAT item, not say
+    'already saved' and not create a second copy."""
+    client.catalogue["https://www.amazon.in/dp/B0BOTCHECK"] = Product(
+        url="https://www.amazon.in/dp/B0BOTCHECK", method="amazon",
+        error="Amazon showed a bot-check page instead of the product.")
+    stuck = client.post("/items/from-link", json={"url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H).json()
+    assert stuck["needs_price"] and stuck["name"] == "https://www.amazon.in/dp/B0BOTCHECK"
+
+    page = ('<html><body><span id="productTitle">Rose Gold Watch</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹40,990</span></div></body></html>')
+    r = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0BOTCHECK"},
+                    files={"html": ("p.html", page, "text/html")}, headers=H)
+
+    assert r.status_code == 201
+    item = r.json()
+    assert item["id"] == stuck["id"]                                  # same item, not a new one
+    assert item["name"] == "Rose Gold Watch" and item["price"] == 40990
+    assert len(client.get("/items", headers=H).json()) == 1           # still only one item
+
+    # Once it HAS a price, adding it again is a normal duplicate.
+    again = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0BOTCHECK"},
+                        files={"html": ("p.html", page, "text/html")}, headers=H)
+    assert again.status_code == 409
+
+
+
+def test_flipkart_links_keep_only_the_product_code():
+    """The same sneakers came in three ways (paste, clipboard, Share Sheet) with
+    different extras after '?', so they were saved three times. All must clean
+    to one link, so the duplicate check catches them."""
+    expected = "https://www.flipkart.com/reefox-stylish-orange-casual-sneakers-men/p/itmbab39913cc43f"
+    shared = ("https://www.flipkart.com/reefox-stylish-orange-casual-sneakers-men/p/itmbab39913cc43f"
+              "?pid=SHOHRN6Z7HSXACHE&lid=LSTSHOHRN6Z7HSXACHEQFSUQT&marketplace=FLIPKART"
+              "&store=osp%2Fcil&ctx=eyJkZWxpdmVyZWRCeSI6IiJ9&_appId=CL")
+    assert clean_url(shared) == expected
+    assert clean_url(expected) == expected                                        # already clean
+    assert clean_url("https://dl.flipkart.com/dl/reefox-stylish-orange-casual-sneakers-men"
+                     "/p/itmbab39913cc43f?pid=SHOHRN6Z7HSXACHE") == expected      # app deep link
+    assert clean_url("https://www.flipkart.com/guess-u0291g4m-analog-watch-men/p/itmf1ccbe064d497") != expected
+
+
+
+
+def test_refresh_gives_a_url_named_item_its_real_name(client):
+    """A stuck item is named after its URL. When the phone's Refresh finally
+    reads the page, the item should get the product's real name too, not just
+    the price and photo."""
+    client.catalogue["https://www.amazon.in/dp/B0BOTCHECK"] = Product(
+        url="https://www.amazon.in/dp/B0BOTCHECK", method="amazon",
+        error="Amazon showed a bot-check page instead of the product.")
+    stuck = client.post("/items/from-link", json={"url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H).json()
+    renamed = client.post("/items/from-link", json={"url": "https://amzn.in/d/watch", "name": "My watch"},
+                          headers=H).json()
+
+    page = ('<html><body><span id="productTitle">Gold Mesh Watch</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹1,999</span></div></body></html>')
+    upload = {"html": ("p.html", page, "text/html")}
+    client.post(f"/links/{stuck['links'][0]['id']}/from-html", files=upload, headers=H)
+    client.post(f"/links/{renamed['links'][0]['id']}/from-html", files=upload, headers=H)
+
+    assert client.get(f"/items/{stuck['id']}", headers=H).json()["name"] == "Gold Mesh Watch"
+    assert client.get(f"/items/{renamed['id']}", headers=H).json()["name"] == "My watch"   # your own name stays

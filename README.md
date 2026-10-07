@@ -2,7 +2,7 @@
 
 > A budget-aware wishlist for Indian online shopping. Share or paste a product link from any store, and OnTrack pulls the product name and price automatically, totals everything you plan to buy, and shows what's left of your monthly budget.
 
-**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local) · Browser extension ⏳ · Deployment ⏳
+**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local, laptop + phone) · Browser extension ⏳ · Deployment ⏳
 
 ---
 
@@ -34,7 +34,8 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet
 - **Paste a link** (laptop / API) → same result, with the server fetching the page itself
 - **One item, several stores:** e.g. the same watch on Amazon and Fastrack. Only the **cheapest** link counts toward the budget, so items are never counted twice
-- **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected
+- **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected. Amazon, Savana and Flipkart links are reduced to just the part that identifies the product
+- **Stuck links get rescued:** if a store blocked the first try, adding the same link again (for example from the phone) fills in the existing item's name, price and photo instead of saying "already saved"
 - **Manual items** for anything without a usable link
 
 **Lists and buying**
@@ -53,13 +54,14 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
 - **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a status badge (Fits budget / Over budget / Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
 - **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
-- **Paste a link** to add an item from the laptop, with a hint that Amazon works best through the phone
-- **When a store won't give a price,** the row shows the real reason (for example *"Amazon showed a bot-check page"*) and a box to type the price by hand
+- **Paste a link** to add an item from the laptop
+- **When a store won't give a price,** the row shows *Needs a price*. *Planned:* show the real reason (for example *"Amazon showed a bot-check page"*) and a box to type the price by hand. This was designed, but the work was never committed (see Challenge 11)
 - **Light and dark mode:** follows the device until you tap the moon/sun button, then remembers your choice
 - **Works on laptop and phone:** two columns on a laptop, one on a phone, with no separate phone code
 
 **Prices**
-- **Refresh on demand:** re-check prices when asked. Bought items are skipped. Amazon prices are refreshed **through the iPhone** (a "Refresh OnTrack" Shortcut), every other store by the server
+- **Refresh on demand:** re-check prices when asked. Bought items are skipped. Amazon prices are refreshed **through the iPhone** (a "Refresh OnTrack" Shortcut), every other store by the server. Amazon links that still have **no price** are always included, so a blocked item is fixed on the next tap, and an item still named after its URL gets its real name
+- **Never hangs:** adding a link gives up after **25 seconds in total**, and the database is never locked while a store page downloads, so the rest of the app keeps working
 - **Price history** per item: every check, oldest first, ready for a chart ("↓ ₹40 since you saved it", lowest price seen)
 - **Graceful failures:** if a store blocks a check, the last known price is kept and the reason is shown
 
@@ -115,7 +117,7 @@ Deleting an item removes its links, price history and status history with it (`O
 | Fetching | **curl_cffi** (laptop/server) · **the iPhone itself** (Amazon) | See "Challenges" below |
 | Parsing | **BeautifulSoup + lxml**, regex for embedded JSON | Standard, robust HTML parsing |
 | Uploads | **python-multipart** | Lets FastAPI read the page the phone uploads as a file |
-| Database | **SQLite** now → **Postgres** when hosted | SQLite needs no setup locally; hosted servers don't keep local files, so production needs a separate database |
+| Database | **SQLite** now → **Postgres** when hosted | SQLite needs no setup locally; hosted servers don't keep local files, so production needs a separate database. Switching early was considered during the "server freezes" bug and rejected: the real cause was in my code (Challenge 16) |
 | Frontend | **React + TypeScript**, built with **Vite** | Browsers only run JavaScript; React is the most widely used UI library, and TypeScript catches mistakes (a misspelled field, a missing prop) while typing. Vite creates the project in one command and reloads the page instantly on save |
 | Styling | **Plain CSS with variables** (design tokens) | Every colour is a variable defined once for light and once for dark, so dark mode needs no component changes. No CSS framework, so the look stays deliberate and the code stays readable |
 | Linting | **Oxlint** | Vite's default; fast, no setup |
@@ -231,7 +233,7 @@ A single `status` column only knows where an item is *now*. Once something moved
 **What I did:**
 - **Researched how price-comparison sites cope.** Most use official affiliate data feeds (Amazon's Product Advertising API needs an approved Associates account), feeds that stores send them, or **browser extensions that read the page the shopper is already viewing**. The last is the same pattern as the phone path.
 - **Ruled out** rotating proxies and CAPTCHA-solving services: they go against store terms and break whenever detection changes.
-- **Made failure graceful:** the row shows the backend's actual error and offers a box to type the price (stored as `manual_price`, which the budget already used). The paste box warns that Amazon works best through the phone.
+- **Designed a graceful failure:** the row would show the backend's actual error and a box to type the price (stored as `manual_price`, which the budget already uses), and the paste box would warn that Amazon works best through the phone. While testing on the phone on 7 Oct, the price box was missing. `git log` showed why: that work had **never been committed**, and it wasn't in my working folder either. It will be rebuilt. **Lesson:** check `git status` and `git log` before calling a step done.
 - **Planned:** a browser extension, so the laptop gets the same "fetch as the user" path as the phone.
 
 ### 12. Files that worked on Windows but would break when deployed
@@ -246,12 +248,71 @@ Vite watches every file and updates the page on save. Once, Windows had a file l
 
 The backend's CORS setting allows `http://localhost:5173`. Opening the app as `http://127.0.0.1:5173` makes the browser treat it as a different website and block every request, which the app can only report as "Can't reach the server". **Rule:** open the app at `localhost`, and add any other address (such as the laptop's Wi-Fi IP, for testing on the phone) to `ONTRACK_CORS_ORIGINS`.
 
+### 15. Testing on the phone: "Safari can't open the page"
+
+**Symptom:** the web app opened on the laptop at `http://192.168.1.59:5173`, but the iPhone on the same Wi-Fi said the server stopped responding.
+
+**Cause:** two things in a row. Vite was started with plain `npm run dev`, which only accepts connections from the laptop itself (its output even says `Network: use --host to expose`). After fixing that, **Windows Firewall** silently dropped the phone's requests, because the Wi-Fi was not marked as a private network. "Stopped responding" (no answer at all, rather than a refusal) is the typical sign of a firewall.
+
+**Fix:** `npm run dev -- --host` (the lone `--` passes `--host` through npm to Vite), set the Wi-Fi's network profile to **Private**, and add one firewall rule for ports 5173 and 8000 on private networks only. The phone's address also had to be added to `ONTRACK_CORS_ORIGINS`.
+
+### 16. The server kept "freezing"
+
+**Symptom:** sometimes everything stopped: "Adding…" spun forever, the Shortcuts timed out, and the uvicorn terminal showed nothing at all. Restarting fixed it until the next time. My first idea was to switch from SQLite to Postgres.
+
+**What I did first:** reproduced it. I ran the backend against a fake store that accepts the connection and never answers, and used the app at the same time:
+
+| During a slow add | Result |
+|---|---|
+| Reading (`/summary`) | instant |
+| Editing the budget | waited 5 s, then `500` ("database is locked") |
+| A second add | waited 5 s, then `500` |
+
+**Causes (three, stacked):**
+1. **The database was locked during downloads.** Adding a link saved an empty item first and *then* downloaded the store page. SQLite allows many readers but only one writer, and the write lock was held for the whole download (20 s, up to ~80 s with redirects). Every other change queued behind it and failed.
+2. **No overall time limit.** Each download had a 20 s limit, but one add can need several downloads (the page, up to 3 redirect hops, Shopify's `.js` lookup).
+3. **Uvicorn only logs a request when it finishes**, so a stuck request was invisible and the terminal looked dead. On Windows, `Ctrl+C` with `--reload` can also leave an old server holding port 8000, so new requests go to the stuck one. `netstat -ano | findstr :8000` shows that (more than one `LISTENING` line).
+
+**Fixes:**
+1. **Download first, then write.** Fetching only *reads* the database; the item and link are written afterwards in milliseconds. A test makes a second connection try to write *while* the fake store is still "downloading", with `timeout=0`, and fails if the database is locked.
+2. **A 25-second budget for each add,** shared by all its downloads: each download only gets the time that's left. Tested with a fake clock, so the test runs instantly.
+3. **A log line when each request starts**, plus a `slow … took X s` line for anything over 2 s.
+
+**Why not Postgres?** Postgres locks rows instead of the whole database, so this particular clash would have disappeared, but the requests would still hang for a minute, and holding a transaction open during a network call is a bad habit with any database. Postgres stays planned for deployment.
+
+### 17. A blocked item could never be rescued
+
+**Symptom:** Amazon blocked the laptop's paste, so the item had no name or price. Sharing the same product from the phone, which would have worked, said "already saved". Running *Refresh OnTrack* skipped it too, and when a later refresh finally found the price, the item was still named `https://www.amazon.in/dp/…`.
+
+**Cause:** three rules that are each sensible, but together locked the item out:
+- the duplicate check refused *any* known link, even one without a price;
+- the refresh list skipped links checked in the last hour, and a **failed** check counted as a check;
+- the item's name was only set when it was first created.
+
+**Fix:** a known link **without** a price is filled in instead of refused; the phone's refresh list always includes Amazon links with no price; and every successful check renames an item that is still named after its URL (names I typed myself never start with `http`, so they're left alone). Each rule has a test that replays what happened.
+
+### 18. Flipkart duplicates
+
+**Symptom:** the same sneakers, shared three different ways, became separate items.
+
+**Cause:** Flipkart had no cleaning rule, so the extras after `?` (`pid`, `lid`, `marketplace`, tracking) differed by route, and the duplicate check saw different links.
+
+**Fix:** another allow-list. Flipkart links are reduced to `https://www.flipkart.com/<name>/p/itm…`, including app links from `dl.flipkart.com`. **Decision:** `pid` changes per size or colour, and I chose to treat sizes and colours of one product as one item. (Existing duplicates aren't merged automatically, so I deleted the extra row by hand.)
+
+### 19. A fresh install couldn't run the tests
+
+Setting up the backend from scratch (`pip install -r requirements.txt`) crashed before any test ran: *Form data requires "python-multipart"*. My own venv had it installed by hand, so I never noticed. **Fix:** added it to `requirements.txt`. A deployment server would have hit the same crash.
+
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
 - **The server's `/refresh` still includes Amazon links.** That's fine from a home connection, but once deployed it would send Amazon requests from a datacenter. Planned fix at deployment: `/refresh` skips Amazon, which the phone handles.
 - **Two taps to refresh everything:** the Shortcut for Amazon, `/refresh` for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
-- **Amazon links pasted into the web app** are fetched by the server and may be blocked. Use the phone Shortcut, or type the price into the row. The browser extension will fix this on the laptop.
+- **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Share the same link from the phone and the item is filled in. The browser extension will fix this on the laptop.
+- **"Over budget" follows list order:** items are added up in list order, so after one expensive item, even a cheap one shows *Over budget*. To be redesigned.
+- **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
+- **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
+- **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
 - **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
 
 ## Store support
@@ -262,6 +323,7 @@ The backend's CORS setting allows `http://localhost:5173`. Opening the app as `h
 | Fastrack | JSON-LD (`schema.org/Product`) | ✅ laptop · ⏳ iPhone not tested |
 | Savana (incl. share links) | JS redirect follow + embedded app data | ✅ laptop · ✅ iPhone (Copy Link, server fallback) |
 | Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products (laptop and iPhone) · ⏳ carts |
+| Flipkart (incl. app links) | Generic page data, links cleaned to `/p/itm…` | ✅ laptop paste · ✅ iPhone (Share Sheet, clipboard) · ⏳ MRP not read yet |
 | Myntra, Ajio, Meesho | Not tested yet | ⏳ |
 
 ## Getting started (Windows)
@@ -283,7 +345,7 @@ Generate an API key:
 python -c "import secrets; print(secrets.token_urlsafe(24))"
 ```
 
-Run the tests, then the server (from the `backend` folder):
+Run the tests, then the server. Always from the `backend` folder, where `main.py` lives (from the top folder, uvicorn says *Could not import module "main"*):
 ```powershell
 pytest -q
 uvicorn main:app --reload
@@ -325,6 +387,12 @@ python extractor.py -f links.txt --debug     # --debug saves each fetched page t
 1. Start the server so other devices on the Wi-Fi can reach it: `uvicorn main:app --reload --host 0.0.0.0`
 2. Find the laptop's address with `ipconfig` (**Wireless LAN adapter Wi-Fi → IPv4 Address**). Check it from the phone's Safari: `http://<IP>:8000/health` should show `{"ok":true}`.
 3. Only do this on a trusted home network. The API key still protects every endpoint.
+4. **First time on a network:** in Windows, set the Wi-Fi's network profile to **Private**, and allow the two ports once (PowerShell as Administrator):
+   ```powershell
+   New-NetFirewallRule -DisplayName "OnTrack dev" -Direction Inbound -Protocol TCP -LocalPort 5173,8000 -Action Allow -Profile Private
+   ```
+5. **To use the web app on the phone too:** start it with `npm run dev -- --host`, add `http://<IP>:5173` to `ONTRACK_CORS_ORIGINS` in `backend/.env` (restart uvicorn), open `http://<IP>:5173` on the phone, and set Settings → server to `http://<IP>:8000`.
+6. **If the server goes silent:** run `netstat -ano | findstr :8000` *before* restarting. More than one `LISTENING` line means an old server is still running: stop it with `taskkill /PID <number> /F`. Stop uvicorn with the terminal's trash icon rather than `Ctrl+C`.
 
 The **Add to OnTrack** Shortcut (shown in the Share Sheet, URLs only):
 
@@ -368,7 +436,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `GET` | `/items?status=` | List items: `planned`, `later`, `purchased` or `all` (default) |
 | `GET` | `/items/{id}` | One item with its links |
 | `GET` | `/items/{id}/history` | Every price check for the item's links, oldest first |
-| `POST` | `/items/from-link` | Save an item from a link (the server fetches the page) |
+| `POST` | `/items/from-link` | Save an item from a link (the server fetches the page). A link already saved **without** a price is filled in instead of rejected |
 | `POST` | `/items/from-html` | Save an item from a page the phone already fetched (form: `url` + `html` file); non-Amazon pages without a price fall back to a server fetch |
 | `POST` | `/items` | Save a manual item (name + price) |
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
@@ -376,7 +444,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `DELETE` | `/items/{id}` · `/links/{id}` | Remove an item or a link |
 | `POST` | `/refresh?force=` | Re-check prices (skips recently checked links and bought items) |
 | `POST` | `/items/{id}/refresh` | Re-check one item |
-| `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, not checked in the last hour |
+| `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, and either not checked in the last hour or still without a price |
 | `POST` | `/links/{id}/from-html` | Upload a page the phone downloaded for one link; records the new price |
 
 ## Project structure
@@ -388,7 +456,7 @@ OnTrack/
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 37 passing
+│   ├── tests/             offline tests (fake pages, fake extractor), 44 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -430,12 +498,21 @@ OnTrack/
 - [ ] Daily automatic refresh with an iOS Automation (after deployment, so it works on any network)
 - [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
 - [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
+- [x] Backend fixes from phone testing: no database lock during downloads, 25 s limit per add, request-start logging, stuck links rescued (share again or Refresh), Flipkart duplicates
+- [ ] Rebuild the "Needs a price" fallback: the real error, a box to type the price, the Amazon hint
 - [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
 - [ ] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`
 - [ ] Installable PWA (home-screen icon, app name, offline shell)
 - [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
+- [ ] Rethink "Over budget" (each item on its own, or in priority order?)
+- [ ] Flipkart MRP (the struck-through price)
+- [ ] Accounts, so several people can use one deployed OnTrack (each with their own list and budget)
+
+**Parked ideas**
+- Native Android app with Flutter (installs as an APK on Android; an iPhone build would need a Mac, so the iPhone gets the PWA)
+- Tailscale, so the phone reaches the laptop at one fixed address on any network
 
 ## Development log
 
@@ -467,4 +544,9 @@ OnTrack/
 
 **2026-10-07**
 - Added the paste-a-link box
-- Hit Amazon's bot-check from the laptop; researched how price-comparison sites get data; made failures graceful (real error in the row, type the price by hand, Amazon hint); planned a browser extension as the laptop version of the phone path
+- Hit Amazon's bot-check from the laptop; researched how price-comparison sites get data; designed a graceful failure (real error, type the price by hand, Amazon hint) and planned a browser extension as the laptop version of the phone path
+- Tested the web app on the iPhone: fixed Vite's `--host`, the Windows Firewall (Private profile + one rule) and CORS. Budget, tabs, rows, actions, theme and phone layout all work
+- Found that the price-box work had never been committed; `feature/frontend` was merged as PR #3 without it
+- Investigated "the server freezes": reproduced it with a fake store that never answers, found the database write lock held during downloads, and decided against switching to Postgres for this
+- New branch `feature/backend-fixes`, one tested commit per step: fetch before writing, a 25 s limit per add, request-start logging, Amazon links without a price always in the phone's refresh list, re-adding a stuck link fills it in, `python-multipart` in requirements, Flipkart link cleaning, and real names for URL-named items after any check. 44 tests passing
+- Phone round on the real app: Refresh rescued the stuck Amazon item, the sneakers' third share said "already saved", every request now logs when it starts

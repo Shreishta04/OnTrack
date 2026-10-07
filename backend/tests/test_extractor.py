@@ -155,3 +155,27 @@ def test_parse_price_formats():
     assert parse_price("Rs. 79") == 79
     assert parse_price(2499) == 2499
     assert parse_price("out of stock") is None
+
+
+
+
+def test_slow_store_gives_up_after_total_time_limit():
+    """One add can need several downloads (a page that redirects twice, say).
+    All of them together must stop after 25 s, so "Adding..." can't hang for minutes."""
+    from extractor import deadline_fetcher
+
+    now = [0.0]                                   # a fake clock we move by hand
+    timeouts = []
+
+    def slow_get(url, timeout):
+        timeouts.append(timeout)
+        now[0] += 10                              # every download takes 10 s
+        # a tiny "redirect" page, like Savana share links, so extract() keeps going
+        return Page(200, url, '<script>location.href = "https://shop.example/next"</script>')
+
+    p = extract("https://shop.example/start", deadline_fetcher(slow_get, total=25, clock=lambda: now[0]))
+
+    assert timeouts == [20, 15, 5]                # each download only gets the time that's left
+    assert not p.ok and "took too long" in p.error
+
+

@@ -98,24 +98,56 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
         conn.execute(
             "UPDATE links SET title = COALESCE(title, ?), last_checked = ?, last_error = ? WHERE id = ?",
             (p.title, now(), p.error, link_id))
+    if p.title:
+        # Items saved while nothing could be read are named after their URL.
+        # The first check that finds a real title renames them (names you
+        # typed yourself never start with "http", so they're left alone).
+        conn.execute(
+            "UPDATE items SET name = ? WHERE id = (SELECT item_id FROM links WHERE id = ?) "
+            "AND name LIKE 'http%'", (p.title, link_id))
 
 
-def _insert_link(conn: sqlite3.Connection, item_id: int, url: str, extract_fn: ExtractFn) -> Product:
+def _known_link(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
+    """A link we already have for this URL, or None.
+
+    A known link WITH a price is a real duplicate. A known link WITHOUT a
+    price is a stuck one (e.g. Amazon showed the server a bot-check), so we
+    return it to be filled in instead of refusing.
+    """
+    row = conn.execute("SELECT id, item_id, price FROM links WHERE url = ?", (url,)).fetchone()
+    if row and row["price"] is not None:
+        raise Duplicate(row["item_id"])
+    return row
+
+
+def _fetch_link(conn: sqlite3.Connection, url: str,
+                extract_fn: ExtractFn) -> tuple[str, Product, sqlite3.Row | None]:
+    """Download and read a store page. Only READS the database, so it never
+    holds a write lock while we wait for the store (which can take 20+ s).
+
+    Returns the cleaned final URL, what the page said, and the stuck link this
+    URL already has (None if the link is new).
+    """
     cleaned = clean_url(url)
-    existing = conn.execute("SELECT item_id FROM links WHERE url = ?", (cleaned,)).fetchone()
-    if existing:
-        raise Duplicate(existing["item_id"])
+    stuck = _known_link(conn, cleaned)
 
-    p = extract_fn(url)
+    p = extract_fn(url)                        # the slow part: no write lock held here
     final_url = clean_url(p.url or cleaned)   # e.g. amzn.in short link -> amazon.in/dp/...
-    existing = conn.execute("SELECT item_id FROM links WHERE url = ?", (final_url,)).fetchone()
-    if existing:
-        raise Duplicate(existing["item_id"])
+    return final_url, p, stuck or _known_link(conn, final_url)
 
+
+def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Product) -> None:
+    """Write a link we've already fetched. Fast: milliseconds."""
     cur = conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
                        (item_id, final_url, now()))
     _record_check(conn, cur.lastrowid, p)
-    return p
+
+
+def _fill_stuck_link(conn: sqlite3.Connection, stuck: sqlite3.Row, p: Product) -> int:
+    """Record a new attempt on a link that had no price (_record_check also
+    gives the item its real name if it was still named after its URL)."""
+    _record_check(conn, stuck["id"], p)
+    return stuck["item_id"]
 
 
 def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
@@ -124,19 +156,23 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
 
     If extraction fails the item is still created (with the store's link and
     whatever title we got), so you can type the price yourself instead of
-    losing the link.
+    losing the link. Adding that same link again later (e.g. from the phone)
+    fills in the existing item instead of making a second one.
+
+    Order matters: fetch the page FIRST, then write. Writing first would lock
+    the database for the whole download, and every other change would fail.
     """
+    final_url, p, stuck = _fetch_link(conn, url, extract_fn)
+    if stuck:
+        item_id = _fill_stuck_link(conn, stuck, p)
+        conn.commit()
+        return item_id
+
     cur = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?)",
-                       (name or "Untitled item", priority, now()))
+                       (name or p.title or p.url or url, priority, now()))
     item_id = cur.lastrowid
     _log_status(conn, item_id, None, "planned")  # initial status
-    try:
-        p = _insert_link(conn, item_id, url, extract_fn)
-    except Duplicate:
-        conn.rollback()      # undo the empty item we just inserted
-        raise
-    if not name:
-        conn.execute("UPDATE items SET name = ? WHERE id = ?", (p.title or p.url or url, item_id))
+    _save_link(conn, item_id, final_url, p)
     conn.commit()
     return item_id
 
@@ -144,7 +180,13 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
 def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
     """Attach another store's link to an existing item (Amazon + Fastrack for one watch)."""
     _require_item(conn, item_id)
-    _insert_link(conn, item_id, url, extract_fn)
+    final_url, p, stuck = _fetch_link(conn, url, extract_fn)
+    if stuck and stuck["item_id"] != item_id:
+        raise Duplicate(stuck["item_id"])      # that link belongs to another item
+    if stuck:
+        _fill_stuck_link(conn, stuck, p)
+    else:
+        _save_link(conn, item_id, final_url, p)
     conn.commit()
 
 
@@ -353,13 +395,15 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
             "changed": changes, "failed": failed}
 
 def phone_refresh_list(conn, force: bool = False) -> list[dict]:
-    """Amazon links the phone should re-download: not bought, and due for a check."""
+    """Amazon links the phone should re-download: not bought, and either due for
+    a check or still without a price. A link with no price skips the cooldown:
+    a failed attempt (e.g. a bot-check page) shouldn't make us wait an hour."""
     rows = conn.execute(
-        "SELECT links.id, links.url, links.last_checked FROM links "
+        "SELECT links.id, links.url, links.price, links.last_checked FROM links "
         "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' ORDER BY links.id"
     ).fetchall()
     return [{"link_id": r["id"], "url": r["url"]} for r in rows
-            if _is_amazon(r["url"]) and _is_due(r["last_checked"], force)]
+            if _is_amazon(r["url"]) and (r["price"] is None or _is_due(r["last_checked"], force))]
 
 
 def refresh_link_from_html(conn, link_id: int, html: str) -> dict:
