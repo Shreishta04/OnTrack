@@ -294,3 +294,33 @@ def test_phone_refresh_list_and_upload(client):
     item = client.get(f"/items/{item['id']}", headers=H).json()
     assert item["price"] == 1799 and item["links"][0]["lowest_price_seen"] == 1799
     assert client.post("/links/999/from-html", files=upload, headers=H).status_code == 404
+
+
+
+
+def test_database_not_locked_while_store_page_downloads(client, tmp_path):
+    """While we wait for a slow store, other changes (like editing the budget)
+    must still work. Before the fix, adding a link locked the database for the
+    whole download, and every other change failed with 'database is locked'."""
+    results = []
+
+    def slow_store(url):
+        # Pretend the store is still sending its page. Meanwhile, try a write
+        # from a second connection with no patience at all (timeout=0).
+        other = sqlite3.connect(tmp_path / "test.db", timeout=0)
+        try:
+            other.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('budget', '5000')")
+            other.commit()
+            results.append("write worked")
+        except sqlite3.OperationalError as exc:      # "database is locked"
+            results.append(str(exc))
+        finally:
+            other.close()
+        return Product(url=url, ok=True, title="Slow Store Lamp", price=999, method="json-ld")
+
+    main.app.dependency_overrides[main.get_extract] = lambda: slow_store
+    r = client.post("/items/from-link", json={"url": "https://slow.example/lamp"}, headers=H)
+
+    assert r.status_code == 201
+    assert r.json()["name"] == "Slow Store Lamp"
+    assert results == ["write worked"]

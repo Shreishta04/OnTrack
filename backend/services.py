@@ -100,22 +100,27 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
             (p.title, now(), p.error, link_id))
 
 
-def _insert_link(conn: sqlite3.Connection, item_id: int, url: str, extract_fn: ExtractFn) -> Product:
+def _fetch_link(conn: sqlite3.Connection, url: str, extract_fn: ExtractFn) -> tuple[str, Product]:
+    """Download and read a store page. Only READS the database, so it never
+    holds a write lock while we wait for the store (which can take 20+ s)."""
     cleaned = clean_url(url)
     existing = conn.execute("SELECT item_id FROM links WHERE url = ?", (cleaned,)).fetchone()
     if existing:
         raise Duplicate(existing["item_id"])
 
-    p = extract_fn(url)
+    p = extract_fn(url)                        # the slow part: no write lock held here
     final_url = clean_url(p.url or cleaned)   # e.g. amzn.in short link -> amazon.in/dp/...
     existing = conn.execute("SELECT item_id FROM links WHERE url = ?", (final_url,)).fetchone()
     if existing:
         raise Duplicate(existing["item_id"])
+    return final_url, p
 
+
+def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Product) -> None:
+    """Write a link we've already fetched. Fast: milliseconds."""
     cur = conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
                        (item_id, final_url, now()))
     _record_check(conn, cur.lastrowid, p)
-    return p
 
 
 def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
@@ -125,18 +130,16 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
     If extraction fails the item is still created (with the store's link and
     whatever title we got), so you can type the price yourself instead of
     losing the link.
+
+    Order matters: fetch the page FIRST, then write. Writing first would lock
+    the database for the whole download, and every other change would fail.
     """
+    final_url, p = _fetch_link(conn, url, extract_fn)
     cur = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?)",
-                       (name or "Untitled item", priority, now()))
+                       (name or p.title or p.url or url, priority, now()))
     item_id = cur.lastrowid
     _log_status(conn, item_id, None, "planned")  # initial status
-    try:
-        p = _insert_link(conn, item_id, url, extract_fn)
-    except Duplicate:
-        conn.rollback()      # undo the empty item we just inserted
-        raise
-    if not name:
-        conn.execute("UPDATE items SET name = ? WHERE id = ?", (p.title or p.url or url, item_id))
+    _save_link(conn, item_id, final_url, p)
     conn.commit()
     return item_id
 
@@ -144,9 +147,10 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
 def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
     """Attach another store's link to an existing item (Amazon + Fastrack for one watch)."""
     _require_item(conn, item_id)
-    _insert_link(conn, item_id, url, extract_fn)
+    final_url, p = _fetch_link(conn, url, extract_fn)
+    _save_link(conn, item_id, final_url, p)
     conn.commit()
-
+    
 
 def create_manual_item(conn, name: str, price: float | None, note: str | None = None,
                        priority: int = 0) -> int:
