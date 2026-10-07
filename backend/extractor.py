@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -48,6 +49,32 @@ class Page:
 Fetcher = Callable[[str], Page]
 
 
+# Time limits for downloading store pages. One add can need several downloads
+# (the page, a redirect hop, Shopify's .js lookup), so besides a limit per
+# download there is a limit for the whole add.
+REQUEST_TIMEOUT = 20      # seconds for any single download
+TOTAL_TIMEOUT = 25        # seconds for everything one add is allowed to download
+
+
+def deadline_fetcher(get: Callable[[str, float], Page], total: float = TOTAL_TIMEOUT,
+                     clock: Callable[[], float] = time.monotonic) -> Fetcher:
+    """Wrap a downloader so all its downloads TOGETHER stop after `total` seconds.
+
+    Each download gets whatever time is left (at most REQUEST_TIMEOUT). Once
+    the time is used up, the next download is refused with a TimeoutError,
+    which extract() turns into a normal "Needs a price" error message.
+    """
+    end = clock() + total
+
+    def fetch(url: str) -> Page:
+        left = end - clock()
+        if left <= 0:
+            raise TimeoutError(f"the store took too long (gave up after {total:g} s)")
+        return get(url, min(REQUEST_TIMEOUT, left))
+
+    return fetch
+
+
 def make_fetcher() -> Fetcher:
     # curl_cffi reproduces Chrome's TLS handshake. Bot-protection services
     # fingerprint that handshake, so a fake User-Agent alone isn't enough.
@@ -56,11 +83,11 @@ def make_fetcher() -> Fetcher:
     session = creq.Session(impersonate="chrome")
     session.headers.update({"Accept-Language": "en-IN,en;q=0.9"})
 
-    def fetch(url: str) -> Page:
-        r = session.get(url, timeout=20, allow_redirects=True)
+    def get(url: str, timeout: float) -> Page:
+        r = session.get(url, timeout=timeout, allow_redirects=True)
         return Page(status=r.status_code, url=str(r.url), text=r.text)
 
-    return fetch
+    return deadline_fetcher(get)
 
 
 def html_fetcher(url: str, html: str) -> Fetcher:
