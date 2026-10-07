@@ -93,6 +93,14 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
         conn.execute(
             "INSERT INTO price_history (link_id, price, mrp, checked_at) VALUES (?, ?, ?, ?)",
             (link_id, p.price, p.mrp, now()))
+        # A link saved by hand may be a short link (amzn.in/d/…) we never
+        # followed. Once a page is read, store its real, cleaned address, so
+        # the duplicate check recognises the product when it's shared again.
+        real_url = clean_url(p.url)
+        conn.execute(
+            "UPDATE links SET url = ? WHERE id = ? AND url != ? "
+            "AND NOT EXISTS (SELECT 1 FROM links WHERE url = ?)",
+            (real_url, link_id, real_url, real_url))
     else:
         # Keep the last known price; just note that this attempt failed.
         conn.execute(

@@ -456,3 +456,28 @@ def test_add_by_hand_with_a_link_is_filled_in_later_by_refresh(client):
 def test_add_by_hand_without_a_link_still_works(client):
     item = client.post("/items", json={"name": "Gift", "price": 2000}, headers=H).json()
     assert item["price"] == 2000 and item["links"] == []
+
+
+
+def test_short_link_added_by_hand_becomes_the_real_link_after_a_check(client):
+    """Adding by hand never contacts the store, so an amzn.in short link stays
+    short. Once Refresh reads the page, the link should become the real
+    /dp/ address, so sharing the same product later says 'already saved'."""
+    item = client.post("/items", json={"name": "Alexa", "price": 2555,
+                                       "url": "https://amzn.in/d/0ahlEBRm"}, headers=H).json()
+    link_id = item["links"][0]["id"]
+    assert item["links"][0]["url"] == "https://amzn.in/d/0ahlEBRm"            # nothing followed yet
+
+    page = ('<html><head><link rel="canonical" href="https://www.amazon.in/Echo-Dot/dp/B0ECHODOT5"/></head>'
+            '<body><span id="productTitle">Amazon Echo Dot (5th Gen)</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹4,499</span></div></body></html>')
+    upload = {"html": ("p.html", page, "text/html")}
+    client.post(f"/links/{link_id}/from-html", files=upload, headers=H)
+
+    item = client.get(f"/items/{item['id']}", headers=H).json()
+    assert item["links"][0]["url"] == "https://www.amazon.in/dp/B0ECHODOT5"  # the real address now
+    assert item["name"] == "Alexa" and item["price"] == 4499
+
+    again = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0ECHODOT5"},
+                        files=upload, headers=H)
+    assert again.status_code == 409                                          # recognised as a duplicate
