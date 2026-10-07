@@ -100,20 +100,33 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
             (p.title, now(), p.error, link_id))
 
 
-def _fetch_link(conn: sqlite3.Connection, url: str, extract_fn: ExtractFn) -> tuple[str, Product]:
+def _known_link(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
+    """A link we already have for this URL, or None.
+
+    A known link WITH a price is a real duplicate. A known link WITHOUT a
+    price is a stuck one (e.g. Amazon showed the server a bot-check), so we
+    return it to be filled in instead of refusing.
+    """
+    row = conn.execute("SELECT id, item_id, price FROM links WHERE url = ?", (url,)).fetchone()
+    if row and row["price"] is not None:
+        raise Duplicate(row["item_id"])
+    return row
+
+
+def _fetch_link(conn: sqlite3.Connection, url: str,
+                extract_fn: ExtractFn) -> tuple[str, Product, sqlite3.Row | None]:
     """Download and read a store page. Only READS the database, so it never
-    holds a write lock while we wait for the store (which can take 20+ s)."""
+    holds a write lock while we wait for the store (which can take 20+ s).
+
+    Returns the cleaned final URL, what the page said, and the stuck link this
+    URL already has (None if the link is new).
+    """
     cleaned = clean_url(url)
-    existing = conn.execute("SELECT item_id FROM links WHERE url = ?", (cleaned,)).fetchone()
-    if existing:
-        raise Duplicate(existing["item_id"])
+    stuck = _known_link(conn, cleaned)
 
     p = extract_fn(url)                        # the slow part: no write lock held here
     final_url = clean_url(p.url or cleaned)   # e.g. amzn.in short link -> amazon.in/dp/...
-    existing = conn.execute("SELECT item_id FROM links WHERE url = ?", (final_url,)).fetchone()
-    if existing:
-        raise Duplicate(existing["item_id"])
-    return final_url, p
+    return final_url, p, stuck or _known_link(conn, final_url)
 
 
 def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Product) -> None:
@@ -123,18 +136,34 @@ def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Produc
     _record_check(conn, cur.lastrowid, p)
 
 
+def _fill_stuck_link(conn: sqlite3.Connection, stuck: sqlite3.Row, p: Product) -> int:
+    """Record a new attempt on a link that had no price. If the item is still
+    named after its URL (nothing could be read before), use the real title."""
+    _record_check(conn, stuck["id"], p)
+    if p.title:
+        conn.execute("UPDATE items SET name = ? WHERE id = ? AND name LIKE 'http%'",
+                     (p.title, stuck["item_id"]))
+    return stuck["item_id"]
+
+
 def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
                           name: str | None = None, priority: int = 0) -> int:
     """Paste a link -> new item named after the product.
 
     If extraction fails the item is still created (with the store's link and
     whatever title we got), so you can type the price yourself instead of
-    losing the link.
+    losing the link. Adding that same link again later (e.g. from the phone)
+    fills in the existing item instead of making a second one.
 
     Order matters: fetch the page FIRST, then write. Writing first would lock
     the database for the whole download, and every other change would fail.
     """
-    final_url, p = _fetch_link(conn, url, extract_fn)
+    final_url, p, stuck = _fetch_link(conn, url, extract_fn)
+    if stuck:
+        item_id = _fill_stuck_link(conn, stuck, p)
+        conn.commit()
+        return item_id
+
     cur = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?)",
                        (name or p.title or p.url or url, priority, now()))
     item_id = cur.lastrowid
@@ -147,8 +176,13 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
 def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
     """Attach another store's link to an existing item (Amazon + Fastrack for one watch)."""
     _require_item(conn, item_id)
-    final_url, p = _fetch_link(conn, url, extract_fn)
-    _save_link(conn, item_id, final_url, p)
+    final_url, p, stuck = _fetch_link(conn, url, extract_fn)
+    if stuck and stuck["item_id"] != item_id:
+        raise Duplicate(stuck["item_id"])      # that link belongs to another item
+    if stuck:
+        _fill_stuck_link(conn, stuck, p)
+    else:
+        _save_link(conn, item_id, final_url, p)
     conn.commit()
 
 

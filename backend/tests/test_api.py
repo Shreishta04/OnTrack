@@ -349,3 +349,31 @@ def test_phone_list_includes_links_with_no_price_even_if_just_checked(client):
     due = client.get("/refresh/phone-list", headers=H).json()      # both were checked seconds ago
     assert [d["link_id"] for d in due] == [stuck["links"][0]["id"]]   # only the one without a price
 
+
+
+def test_adding_a_stuck_link_again_fills_it_in(client):
+    """The server hit Amazon's bot-check, so the item has no name or price.
+    Sharing the same link from the phone should fill in THAT item, not say
+    'already saved' and not create a second copy."""
+    client.catalogue["https://www.amazon.in/dp/B0BOTCHECK"] = Product(
+        url="https://www.amazon.in/dp/B0BOTCHECK", method="amazon",
+        error="Amazon showed a bot-check page instead of the product.")
+    stuck = client.post("/items/from-link", json={"url": "https://www.amazon.in/dp/B0BOTCHECK"}, headers=H).json()
+    assert stuck["needs_price"] and stuck["name"] == "https://www.amazon.in/dp/B0BOTCHECK"
+
+    page = ('<html><body><span id="productTitle">Rose Gold Watch</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹40,990</span></div></body></html>')
+    r = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0BOTCHECK"},
+                    files={"html": ("p.html", page, "text/html")}, headers=H)
+
+    assert r.status_code == 201
+    item = r.json()
+    assert item["id"] == stuck["id"]                                  # same item, not a new one
+    assert item["name"] == "Rose Gold Watch" and item["price"] == 40990
+    assert len(client.get("/items", headers=H).json()) == 1           # still only one item
+
+    # Once it HAS a price, adding it again is a normal duplicate.
+    again = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0BOTCHECK"},
+                        files={"html": ("p.html", page, "text/html")}, headers=H)
+    assert again.status_code == 409
+
