@@ -57,11 +57,13 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone
 - **When a store won't give a price,** the row says **why** in plain words (*"Amazon showed a bot-check page…"*, *"The store took too long to answer."* instead of raw `curl` errors) and **what to do**: for Amazon, tap *Refresh OnTrack* on the iPhone or share it from there, and the name, photo and price fill in by themselves
 - **Placeholder letters:** items without a photo show their first letter; an item still named after its link shows the **store's** letter (A for Amazon) instead of "H" from *https*
+- **Refresh button (↻)** in the header: the server re-checks every store except Amazon (the iPhone does Amazon), the icon spins while it works, and a short note says what happened (*"Checked 4 · 1 price dropped · Amazon refreshes from your iPhone"*, or *"All prices were checked in the last hour"*)
+- **Stays current by itself:** coming back to the app (from Shortcuts, another app or another tab) reloads the list, so prices the iPhone refreshed show up without a manual reload
 - **Light and dark mode:** follows the device until you tap the moon/sun button, then remembers your choice
 - **Works on laptop and phone:** two columns on a laptop, one on a phone, with no separate phone code
 
 **Prices**
-- **Refresh on demand:** re-check prices when asked. Bought items are skipped. Amazon prices are refreshed **through the iPhone** (a "Refresh OnTrack" Shortcut), every other store by the server. Amazon links that still have **no price** are always included, so a blocked item is fixed on the next tap, and an item still named after its URL gets its real name
+- **Refresh on demand:** re-check prices when asked. Bought items are skipped. Amazon prices are refreshed **through the iPhone** (a "Refresh OnTrack" Shortcut), every other store by the server (the app's ↻ button). The server **never** fetches Amazon: the stores it must leave to the phone are kept in one list (`PHONE_ONLY_STORES`), so adding another store that blocks servers is a one-word change. Amazon links that still have **no price** are always included, so a blocked item is fixed on the next tap, and an item still named after its URL gets its real name
 - **Never hangs:** adding a link gives up after **25 seconds in total**, and the database is never locked while a store page downloads, so the rest of the app keeps working
 - **Price history** per item: every check, oldest first, ready for a chart ("↓ ₹40 since you saved it", lowest price seen)
 - **Graceful failures:** if a store blocks a check, the last known price is kept and the reason is shown
@@ -324,18 +326,32 @@ Setting up the backend from scratch (`pip install -r requirements.txt`) crashed 
 
 **A slip worth remembering:** while pasting this change I replaced three lines instead of adding after them, and deleted the line that saves price history. Three existing tests about history failed straight away, which is exactly what they're for. Habit since: `git diff` before every commit, and look at every `-` line.
 
+### 22. Should the refresh button include Amazon?
+
+**The question:** `POST /refresh` checked every store, Amazon included. From the laptop, Amazon sometimes answers with a bot-check. The last price is kept, but that failed check counted as "checked" for an hour, so the phone's *Refresh OnTrack* would skip the item.
+
+**Decision:** the server skips Amazon; the phone does Amazon. That is exactly how it has to work once deployed (a cloud server's datacenter address gets bot-checked much more), so I did it now. Instead of writing "Amazon" into the refresh code, the server keeps a list of **phone-only stores** in one place; the server refresh, the phone's refresh list and the "never fall back to the server" rule all read it. If Flipkart or Myntra start blocking the deployed server, they go on the list and everything follows.
+
+**Thinking ahead:** for other people, Amazon is the gap. Android has no Shortcuts, and even iPhone users would need to install two. The realistic answer for a multi-user OnTrack is Amazon's official Product Advertising API (needs an approved Associates account); a native Android app or the browser extension would be extras.
+
+### 23. The phone at the office: `127.0.0.1` means "this device"
+
+**Symptom:** at the office the page opened on the phone, but the app said *"Can't reach the server at http://127.0.0.1:8000"*, even though `http://<laptop IP>:8000/health` worked in Safari.
+
+**Cause:** two things. The app saves its server setting in the browser **per address**: at home I'd opened `192.168.1.59:5173`, at the office it was `192.168.29.37:5173`, which Safari treats as a different site with empty settings. So the app fell back to its development default, `127.0.0.1:8000`, and `127.0.0.1` always means *this device*: on the phone, the phone itself. Separately, the office address had to be added to the CORS list (`/health` worked because typing an address isn't a cross-site request; the app calling port 8000 from port 5173 is).
+
+**Fix:** set Settings → server to `http://<laptop IP>:8000` on the phone, and list both the home and office addresses in `ONTRACK_CORS_ORIGINS`. **Lesson:** port 5173 is the app (Vite), port 8000 is the data (uvicorn); the server setting always points at 8000.
+
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
-- **The server's `/refresh` still includes Amazon links.** That's fine from a home connection, but once deployed it would send Amazon requests from a datacenter. Planned fix at deployment: `/refresh` skips Amazon, which the phone handles.
-- **Two taps to refresh everything:** the Shortcut for Amazon, `/refresh` for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
+- **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Share the same link from the phone and the item is filled in. The browser extension will fix this on the laptop.
 - **"Over budget" follows list order:** items are added up in list order, so after one expensive item, even a cheap one shows *Over budget*. To be redesigned.
 - **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
 - **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
-- **Local IP address:** while running on the laptop, the Shortcut points at the laptop's Wi-Fi address, which can change after a router restart. Deployment gives the server a fixed address.
-- **The web app doesn't notice Shortcut refreshes:** after *Refresh OnTrack* runs on the phone, the page shows the old prices until it's reloaded. Planned with the refresh button: reload whenever the app's tab comes back into view.
+- **Local IP address:** while running on the laptop, the Shortcuts and the phone's server setting point at the laptop's Wi-Fi address, which is different at home and at the office (and the app's saved settings don't carry over between addresses). Tailscale would give one fixed address now; deployment fixes it for good.
 
 ### Found while using it, to fix later
 
@@ -454,7 +470,7 @@ The **Refresh OnTrack** Shortcut (run directly, or daily with an iOS Automation)
 | Store | Downloads the page when refreshing | Triggered by |
 |---|---|---|
 | Amazon | the iPhone | Refresh OnTrack Shortcut |
-| Every other store | the server | `POST /refresh` (later: the app's Refresh button) |
+| Every other store | the server | the app's ↻ button (`POST /refresh`) |
 
 ## API overview
 
@@ -473,7 +489,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
 | `DELETE` | `/items/{id}` · `/links/{id}` | Remove an item or a link |
-| `POST` | `/refresh?force=` | Re-check prices (skips recently checked links and bought items) |
+| `POST` | `/refresh?force=` | Re-check prices: skips bought items, links checked in the last hour, and phone-only stores (Amazon). Returns `checked`, `skipped_recent`, `phone_only`, `changed`, `failed` |
 | `POST` | `/items/{id}/refresh` | Re-check one item |
 | `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, and either not checked in the last hour or still without a price |
 | `POST` | `/links/{id}/from-html` | Upload a page the phone downloaded for one link; records the new price |
@@ -487,7 +503,7 @@ OnTrack/
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 47 passing
+│   ├── tests/             offline tests (fake pages, fake extractor), 48 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -512,7 +528,7 @@ OnTrack/
             ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
             ├── Thumb.tsx          product photo or a letter
             ├── SettingsSheet.tsx  API key and server address
-            └── Icons.tsx          moon, sun, sliders, close
+            └── Icons.tsx          refresh, moon, sun, sliders, close
 ```
 
 ## Roadmap
@@ -532,7 +548,7 @@ OnTrack/
 - [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
 - [x] Backend fixes from phone testing: no database lock during downloads, 25 s limit per add, request-start logging, stuck links rescued (share again or Refresh), Flipkart duplicates
 - [x] Stuck rows explain why and how to fix them; Add by hand (name, price, optional link); typed prices labelled; store letters; short links corrected after a check
-- [ ] Refresh button in the header (↻), and reload when the app's tab comes back into view
+- [x] Refresh button in the header (↻), and reload when the app's tab comes back into view; the server never fetches phone-only stores (Amazon)
 - [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
 - [ ] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`
 - [ ] Installable PWA (home-screen icon, app name, offline shell)
@@ -586,3 +602,8 @@ OnTrack/
 - Planned the "Needs a price" fallback with a mockup built from the app's real stylesheet; realised a price box alone doesn't help when Amazon hides everything, and changed the plan
 - `feature/add-by-hand`: `POST /items` takes an optional link (saved without contacting the store), an Add by hand card, stuck rows that explain why and what to do, "typed by you" labels, store letters instead of "H", and short links corrected after a check. 47 tests passing
 - Phone round: Add by hand with and without a link, the number keyboard, duplicates refused; Refresh renamed the long-stuck Amazon row to its real product and replaced my typed Alexa price with Amazon's. Refresh also caught real price changes (Apple Watch ₹40,990 → ₹35,509)
+
+**2026-10-08**
+- Decided the refresh button leaves Amazon to the iPhone, and thought through what that means after deployment and for other people (Android, the official Amazon API)
+- `feature/refresh-button`: a `PHONE_ONLY_STORES` list that `/refresh` skips (with a test that the fake store is never asked for Amazon), a ↻ button with a spinning icon and a short note, and reloading when the app comes back into view. Checked the phone header with the real fonts so the tagline stays on one line. 48 tests passing
+- Phone round from the office: hit the per-address settings and CORS (Challenge 23); then ↻ worked on laptop and phone, and after *Refresh OnTrack* the list updated by itself on switching back to Safari
