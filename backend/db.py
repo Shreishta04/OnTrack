@@ -31,9 +31,9 @@ CREATE TABLE IF NOT EXISTS items (
     name         TEXT    NOT NULL,
     status       TEXT    NOT NULL DEFAULT 'planned',  -- 'planned' | 'later' | 'purchased'
     priority     INTEGER NOT NULL DEFAULT 0,   -- higher = buy first
-    manual_price REAL,                         -- used only when no link has a price
+    manual_price DOUBLE PRECISION,                         -- used only when no link has a price
     note         TEXT,
-    purchased_price REAL,                      -- what you actually paid
+    purchased_price DOUBLE PRECISION,                      -- what you actually paid
     purchased_at TEXT,                         -- when you actually bought it
     created_at   TEXT    NOT NULL
 );
@@ -43,8 +43,8 @@ CREATE TABLE IF NOT EXISTS links (
     item_id      INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
     url          TEXT    NOT NULL UNIQUE,      -- cleaned URL, so the same product can't be saved twice
     title        TEXT,
-    price        REAL,                         -- what you'd pay (latest successful check)
-    mrp          REAL,                         -- struck-through price, if the store shows one
+    price        DOUBLE PRECISION,                         -- what you'd pay (latest successful check)
+    mrp          DOUBLE PRECISION,                         -- struck-through price, if the store shows one
     image        TEXT,
     method       TEXT,                         -- which extractor strategy worked
     last_checked TEXT,                         -- when we last TRIED (success or not)
@@ -55,8 +55,8 @@ CREATE TABLE IF NOT EXISTS links (
 CREATE TABLE IF NOT EXISTS price_history (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     link_id    INTEGER NOT NULL REFERENCES links(id) ON DELETE CASCADE,
-    price      REAL    NOT NULL,
-    mrp        REAL,
+    price      DOUBLE PRECISION NOT NULL,
+    mrp        DOUBLE PRECISION,
     checked_at TEXT    NOT NULL
 );
 

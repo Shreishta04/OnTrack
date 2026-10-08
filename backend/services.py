@@ -156,9 +156,9 @@ def _fetch_link(conn: sqlite3.Connection, url: str,
 
 def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Product) -> None:
     """Write a link we've already fetched. Fast: milliseconds."""
-    cur = conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
-                       (item_id, final_url, now()))
-    _record_check(conn, cur.lastrowid, p)
+    link_id = conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?) RETURNING id",
+                           (item_id, final_url, now())).fetchone()["id"]
+    _record_check(conn, link_id, p)
 
 
 def _fill_stuck_link(conn: sqlite3.Connection, stuck: sqlite3.Row, p: Product) -> int:
@@ -186,9 +186,8 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
         conn.commit()
         return item_id
 
-    cur = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?)",
-                       (name or p.title or p.url or url, priority, now()))
-    item_id = cur.lastrowid
+    item_id = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?) RETURNING id",
+                        (name or p.title or p.url or url, priority, now())).fetchone()["id"]
     _log_status(conn, item_id, None, "planned")  # initial status
     _save_link(conn, item_id, final_url, p)
     conn.commit()
@@ -218,10 +217,9 @@ def create_manual_item(conn, name: str, price: float | None, note: str | None = 
     if link_url and (known := _known_link(conn, link_url)):
         raise Duplicate(known["item_id"], known["id"])     # already saved, even if still stuck
 
-    cur = conn.execute(
-        "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?)",
-        (name, price, note, priority, now()))
-    item_id = cur.lastrowid
+    item_id = conn.execute(
+        "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
+        (name, price, note, priority, now())).fetchone()["id"]
     _log_status(conn, item_id, None, "planned")
     if link_url:
         conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
