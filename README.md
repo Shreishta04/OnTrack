@@ -2,7 +2,7 @@
 
 > A budget-aware wishlist for Indian online shopping. Share or paste a product link from any store, and OnTrack pulls the product name and price automatically, totals everything you plan to buy, and shows what's left of your monthly budget.
 
-**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local, laptop + phone) · Browser extension ⏳ · Deployment ⏳
+**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local, laptop + phone) · Browser extension ✅ (Chrome / Edge) · Deployment ⏳
 
 ---
 
@@ -35,6 +35,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Paste a link** (laptop / API) → same result, with the server fetching the page itself
 - **One item, several stores:** e.g. the same watch on Amazon and Fastrack. Only the **cheapest** link counts toward the budget, so items are never counted twice
 - **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected. Amazon, Savana and Flipkart links are reduced to just the part that identifies the product
+- **Browser extension (laptop):** on any product page, click the OnTrack icon in Chrome or Edge → **Add to OnTrack**. It sends the page your browser already shows, so Amazon works from the laptop too, with no bot-check. On a product that's already saved it offers **Update price**; if a page has no price (a category page), it says so and offers **Remove it**
 - **Stuck links get rescued:** if a store blocked the first try, adding the same link again (for example from the phone) fills in the existing item's name, price and photo instead of saying "already saved"
 - **Add by hand:** a name, a price and an optional link, for anything a store won't let us read or that isn't sold online. The link is saved **without contacting the store**; with one, Refresh later brings in the store's price and photo (the store's price replaces mine, which is kept as a backup, and my name stays). Without one, my price stays as typed. Rows show *typed by you* so typed prices are never mistaken for store prices
 
@@ -54,7 +55,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
 - **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a status badge (Fits budget / Over budget / Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
 - **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
-- **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone
+- **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone (or added with the browser extension)
 - **When a store won't give a price,** the row says **why** in plain words (*"Amazon showed a bot-check page…"*, *"The store took too long to answer."* instead of raw `curl` errors) and **what to do**: for Amazon, tap *Refresh OnTrack* on the iPhone or share it from there, and the name, photo and price fill in by themselves
 - **Placeholder letters:** items without a photo show their first letter; an item still named after its link shows the **store's** letter (A for Amazon) instead of "H" from *https*
 - **Refresh button (↻)** in the header: the server re-checks every store except Amazon (the iPhone does Amazon), the icon spins while it works, and a short note says what happened (*"Checked 4 · 1 price dropped · Amazon refreshes from your iPhone"*, or *"All prices were checked in the last hour"*)
@@ -75,6 +76,10 @@ iPhone Share Sheet ──► "Add to OnTrack" Shortcut
                          1. downloads the product page on the phone's own connection
                          2. uploads link + page (multipart form) ──┐
                                                                     │
+Chrome / Edge ──► OnTrack extension                                 │
+                         reads the page already open in the tab,    │
+                         uploads it the same way ───────────────────┤
+                                                                    │
 React web app (laptop / phone browser) ── JSON ──────────────────┤  HTTP + JSON
                                                                     ▼
                                                  FastAPI backend (Python)
@@ -89,7 +94,7 @@ React web app (laptop / phone browser) ── JSON ─────────�
 
 The layers are kept separate on purpose. `services.py` doesn't know about HTTP, so its rules can be tested directly and reused (for example by a future bot). All SQL lives in `db.py` and `services.py`, so moving from SQLite to Postgres is a contained change.
 
-**Fetching is separate from parsing.** The extractor never downloads anything itself; it calls whatever *fetcher* it is given. On the laptop that's a Chrome-like downloader. For pages the phone already downloaded, it's a fetcher that simply hands back the uploaded page and refuses to go online for anything else. The same parsers run either way, which is what made phone-side fetching a small change.
+**Fetching is separate from parsing.** The extractor never downloads anything itself; it calls whatever *fetcher* it is given. On the laptop that's a Chrome-like downloader. For pages the phone (or the browser extension) already has, it's a fetcher that simply hands back the uploaded page and refuses to go online for anything else. The same parsers run either way, which is what made phone-side fetching, and later the browser extension, small changes: the extension needed only one backend addition.
 
 ### Frontend
 
@@ -342,16 +347,36 @@ Setting up the backend from scratch (`pip install -r requirements.txt`) crashed 
 
 **Fix:** set Settings → server to `http://<laptop IP>:8000` on the phone, and list both the home and office addresses in `ONTRACK_CORS_ORIGINS`. **Lesson:** port 5173 is the app (Vite), port 8000 is the data (uvicorn); the server setting always points at 8000.
 
+### 24. The browser extension: the laptop gets the phone's trick
+
+**Problem:** pasting an Amazon link on the laptop makes the server download the page, and Amazon sometimes answers with a bot-check (Challenge 11).
+
+**Solution:** a Chrome/Edge extension that sends the page **the browser already loaded**, as I see it, to the same `/items/from-html` route the iPhone uses. The server never contacts Amazon. It even helps other stores: the browser has already filled in prices that load with JavaScript.
+
+**Decisions:**
+- **Plain JavaScript, no build step:** four small files plus icons. TypeScript and Vite would add setup for little gain here.
+- **Least permissions:** `activeTab` + `scripting` let it read only the current tab, only when I click the icon; it never sees other tabs or my browsing. It may talk to `localhost` and `127.0.0.1` out of the box; any other server needs a one-time "allow" when it's saved in the settings.
+- **No CORS change needed:** extensions with host permissions aren't held to the browser's cross-site rule, so the server's CORS list stays as it is. I confirmed it in a test with the list untouched.
+- **The page goes as a file** (a `Blob` in the form), for the same 1 MB form-field reason as the Shortcut.
+- **"Already saved" became useful:** the `409` reply now includes `link_id` (one backend change, with a test), so the popup offers **Update price**, which gives me Amazon price refreshes from the laptop.
+- **Server data is shown with `textContent`, never `innerHTML`,** so an odd product name can't inject code into the popup.
+
+**Problems found while building it:**
+- **Settings never appeared on a non-product page.** The popup checked "is this a product page?" before "is it set up?", so a first-time user opening it on a new tab got stuck. Found by running it in a headless Chromium; the settings check now comes first.
+- **Tested before I saw it:** the real extension ran in headless Chromium against the real backend and a tiny fake store: add, already saved → update price (₹1,200 → ₹999), no-price page → remove.
+- **Unzipped one level too deep:** Windows' *Extract All* made `extension/extension/manifest.json`, which Chrome couldn't load, and I'd already committed it. Fixed with a second commit that moves the files up; git recorded it as renames.
+
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
-- **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Share the same link from the phone and the item is filled in. The browser extension will fix this on the laptop.
+- **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
+- **The extension is loaded by hand** (Developer mode → Load unpacked), not from the Chrome Web Store, so it shows a small "unpacked" badge, and after editing its files it needs a reload in `chrome://extensions`.
 - **"Over budget" follows list order:** items are added up in list order, so after one expensive item, even a cheap one shows *Over budget*. To be redesigned.
 - **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
 - **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
-- **Local IP address:** while running on the laptop, the Shortcuts and the phone's server setting point at the laptop's Wi-Fi address, which is different at home and at the office (and the app's saved settings don't carry over between addresses). Tailscale would give one fixed address now; deployment fixes it for good.
+- **Local IP address:** while running on the laptop, the Shortcuts and the phone's server setting point at the laptop's Wi-Fi address, which is different at home and at the office (and the app's saved settings don't carry over between addresses). Deployment gives the server one fixed address.
 
 ### Found while using it, to fix later
 
@@ -366,11 +391,11 @@ Small things I noticed while testing that don't block anything yet:
 
 | Store | Method | Status |
 |---|---|---|
-| Amazon.in (incl. `amzn.in` short links) | Chrome-like fetch, or page fetched by the iPhone · selectors / embedded price data | ✅ (laptop and iPhone) |
+| Amazon.in (incl. `amzn.in` short links) | Page from the iPhone or the browser extension (server fetch as a hit-and-miss fallback) · selectors / embedded price data | ✅ laptop (extension) · ✅ iPhone |
 | Fastrack | JSON-LD (`schema.org/Product`) | ✅ laptop · ⏳ iPhone not tested |
 | Savana (incl. share links) | JS redirect follow + embedded app data | ✅ laptop · ✅ iPhone (Copy Link, server fallback) |
 | Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products (laptop and iPhone) · ⏳ carts |
-| Flipkart (incl. app links) | Generic page data, links cleaned to `/p/itm…` | ✅ laptop paste · ✅ iPhone (Share Sheet, clipboard) · ⏳ MRP not read yet |
+| Flipkart (incl. app links) | Generic page data, links cleaned to `/p/itm…` | ✅ laptop (paste, extension) · ✅ iPhone (Share Sheet, clipboard) · ⏳ MRP not read yet |
 | Myntra, Ajio, Meesho | Not tested yet | ⏳ |
 
 ## Getting started (Windows)
@@ -472,6 +497,17 @@ The **Refresh OnTrack** Shortcut (run directly, or daily with an iOS Automation)
 | Amazon | the iPhone | Refresh OnTrack Shortcut |
 | Every other store | the server | the app's ↻ button (`POST /refresh`) |
 
+On the laptop, an Amazon price can also be refreshed with the browser extension: open the product, click the icon → **Update price**.
+
+### Using the browser extension (Chrome or Edge)
+
+1. Open `chrome://extensions` (or `edge://extensions`), turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder.
+2. Pin it: the puzzle-piece icon in the toolbar → 📌 next to OnTrack.
+3. Click the OnTrack icon. The first time, it asks for the **server** (`http://localhost:8000`), the **API key** (from `backend/.env`) and the **app address** (`http://localhost:5173`). The sliders button changes them later.
+4. On a product page: **Add to OnTrack**. On a product already saved: **Update price**.
+
+After editing any file in `extension/`, click ↻ on its card in `chrome://extensions`.
+
 ## API overview
 
 All endpoints except `/health` require the `X-API-Key` header.
@@ -484,7 +520,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `GET` | `/items/{id}` | One item with its links |
 | `GET` | `/items/{id}/history` | Every price check for the item's links, oldest first |
 | `POST` | `/items/from-link` | Save an item from a link (the server fetches the page). A link already saved **without** a price is filled in instead of rejected |
-| `POST` | `/items/from-html` | Save an item from a page the phone already fetched (form: `url` + `html` file); non-Amazon pages without a price fall back to a server fetch |
+| `POST` | `/items/from-html` | Save an item from a page the phone or the browser extension already has (form: `url` + `html` file); non-Amazon pages without a price fall back to a server fetch. A duplicate answers `409` with `item_id` and `link_id` |
 | `POST` | `/items` | Add by hand: name + price, optional `url` (saved without contacting the store; Refresh can fill in the store's price later) |
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
@@ -492,7 +528,7 @@ All endpoints except `/health` require the `X-API-Key` header.
 | `POST` | `/refresh?force=` | Re-check prices: skips bought items, links checked in the last hour, and phone-only stores (Amazon). Returns `checked`, `skipped_recent`, `phone_only`, `changed`, `failed` |
 | `POST` | `/items/{id}/refresh` | Re-check one item |
 | `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, and either not checked in the last hour or still without a price |
-| `POST` | `/links/{id}/from-html` | Upload a page the phone downloaded for one link; records the new price |
+| `POST` | `/links/{id}/from-html` | Upload a fresh page for one link (phone refresh, or the extension's **Update price**); records the new price |
 
 ## Project structure
 
@@ -503,7 +539,7 @@ OnTrack/
 │   ├── services.py        business logic
 │   ├── db.py              SQLite schema
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 48 passing
+│   ├── tests/             offline tests (fake pages, fake extractor), 49 passing
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -529,6 +565,12 @@ OnTrack/
             ├── Thumb.tsx          product photo or a letter
             ├── SettingsSheet.tsx  API key and server address
             └── Icons.tsx          refresh, moon, sun, sliders, close
+└── extension/                 Chrome / Edge extension (plain JavaScript, no build step)
+    ├── manifest.json          name, permissions (current tab only, on click), icons
+    ├── popup.html             the window that opens from the toolbar icon
+    ├── popup.css              the app's colours, light and dark
+    ├── popup.js               reads the page, sends it, shows the result; settings
+    └── icons/                 the toolbar icon in 4 sizes
 ```
 
 ## Roadmap
@@ -550,7 +592,7 @@ OnTrack/
 - [x] Stuck rows explain why and how to fix them; Add by hand (name, price, optional link); typed prices labelled; store letters; short links corrected after a check
 - [x] Refresh button in the header (↻), and reload when the app's tab comes back into view; the server never fetches phone-only stores (Amazon)
 - [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
-- [ ] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`
+- [x] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`; Update price for saved items; Remove for pages without a price
 - [ ] Installable PWA (home-screen icon, app name, offline shell)
 - [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon; refresh non-Amazon prices when the app opens
 - [ ] Myntra / Ajio / Meesho support
@@ -561,7 +603,6 @@ OnTrack/
 
 **Parked ideas**
 - Native Android app with Flutter (installs as an APK on Android; an iPhone build would need a Mac, so the iPhone gets the PWA)
-- Tailscale, so the phone reaches the laptop at one fixed address on any network
 
 ## Development log
 
@@ -607,3 +648,5 @@ OnTrack/
 - Decided the refresh button leaves Amazon to the iPhone, and thought through what that means after deployment and for other people (Android, the official Amazon API)
 - `feature/refresh-button`: a `PHONE_ONLY_STORES` list that `/refresh` skips (with a test that the fake store is never asked for Amazon), a ↻ button with a spinning icon and a short note, and reloading when the app comes back into view. Checked the phone header with the real fonts so the tagline stays on one line. 48 tests passing
 - Phone round from the office: hit the per-address settings and CORS (Challenge 23); then ↻ worked on laptop and phone, and after *Refresh OnTrack* the list updated by itself on switching back to Safari
+- `feature/browser-extension`: agreed the popup's look in a mockup (six states), then built a Manifest V3 extension in plain JavaScript; the `409` reply now carries `link_id` for **Update price**. Ran the real extension in headless Chromium against the backend and a fake store before handing it over, which caught a settings-ordering bug. 49 tests passing
+- Tried it on real pages: Amazon added from the laptop with no bot-check, plus Flipkart and Littlebox; Update price and Remove work. Fixed a folder that Windows had unzipped one level too deep
