@@ -100,7 +100,7 @@ async def not_found(_: Request, exc: NotFound):
 @app.exception_handler(Duplicate)
 async def duplicate(_: Request, exc: Duplicate):
     return JSONResponse(status_code=409, content={
-        "detail": "This link is already saved.", "item_id": exc.item_id})
+        "detail": "This link is already saved.", "item_id": exc.item_id, "link_id": exc.link_id})
 
 
 # ------------------------------------------------------------ request bodies
