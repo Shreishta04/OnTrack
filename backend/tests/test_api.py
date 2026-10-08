@@ -505,3 +505,23 @@ def test_server_refresh_skips_phone_only_stores(client):
     link = client.get(f"/items/{amazon['id']}", headers=H).json()["links"][0]
     due = client.get("/refresh/phone-list?force=true", headers=H).json()
     assert [d["link_id"] for d in due] == [link["id"]]             # still the phone's job
+
+
+
+
+def test_already_saved_reply_names_the_link(client):
+    """'Already saved' also says WHICH link, so the browser extension can offer
+    'Update price' and send the page to /links/{link_id}/from-html."""
+    item = client.post("/items/from-link", json={"url": "https://amzn.in/d/watch"}, headers=H).json()
+    link_id = item["links"][0]["id"]
+
+    r = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0WATCH"},
+                    files={"html": ("p.html", PHONE_PAGE, "text/html")}, headers=H)
+    assert r.status_code == 409
+    assert r.json() == {"detail": "This link is already saved.", "item_id": item["id"], "link_id": link_id}
+
+    page = ('<html><body><span id="productTitle">Fastrack Ryz Watch</span>'
+            '<div class="priceToPay"><span class="a-offscreen">₹1,899</span></div></body></html>')
+    upd = client.post(f"/links/{r.json()['link_id']}/from-html",
+                      files={"html": ("p.html", page, "text/html")}, headers=H).json()
+    assert upd["ok"] and upd["old_price"] == 1999 and upd["new_price"] == 1899

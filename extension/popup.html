@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>OnTrack</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&family=DM+Sans:wght@400;500&display=swap"
+    />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="top">
+      <span class="brand">OnTrack</span>
+      <button id="settings-btn" class="round" aria-label="Settings" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
+          <circle cx="16" cy="7" r="2" />
+          <circle cx="10" cy="17" r="2" />
+        </svg>
+      </button>
+    </header>
+
+    <!-- The product on this tab (or the saved item, after adding). -->
+    <section id="main">
+      <div class="card">
+        <div id="thumb" class="thumb"></div>
+        <div class="card-text">
+          <div id="name" class="name"></div>
+          <div id="meta" class="meta"></div>
+        </div>
+      </div>
+      <p id="note" class="note" role="status" hidden></p>
+      <button id="primary" class="btn btn-primary">Add to OnTrack</button>
+      <button id="secondary" class="btn btn-secondary" hidden></button>
+    </section>
+
+    <!-- Where the server is, and the key. Shown the first time, or from the sliders button. -->
+    <form id="settings" hidden>
+      <label class="eyebrow" for="server">Server</label>
+      <input id="server" class="field" type="url" required placeholder="http://localhost:8000" />
+      <label class="eyebrow" for="api-key">API key</label>
+      <input id="api-key" class="field" type="password" required placeholder="From backend/.env" />
+      <label class="eyebrow" for="app">App address</label>
+      <input id="app" class="field" type="url" placeholder="http://localhost:5173" />
+      <button class="btn btn-primary" type="submit">Save</button>
+      <p id="settings-note" class="note">The same server and key as the web app's Settings.</p>
+    </form>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

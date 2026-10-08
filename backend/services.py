@@ -33,8 +33,11 @@ class NotFound(Exception):
 
 
 class Duplicate(Exception):
-    def __init__(self, item_id: int):
+    """This link is already saved. Carries the item AND the link, so a client
+    (like the browser extension) can offer to update that link's price."""
+    def __init__(self, item_id: int, link_id: int):
         self.item_id = item_id
+        self.link_id = link_id
 
 
 def now() -> str:
@@ -131,7 +134,7 @@ def _known_link(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
     """
     row = conn.execute("SELECT id, item_id, price FROM links WHERE url = ?", (url,)).fetchone()
     if row and row["price"] is not None:
-        raise Duplicate(row["item_id"])
+        raise Duplicate(row["item_id"],row["id"])
     return row
 
 
@@ -197,7 +200,7 @@ def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
     _require_item(conn, item_id)
     final_url, p, stuck = _fetch_link(conn, url, extract_fn)
     if stuck and stuck["item_id"] != item_id:
-        raise Duplicate(stuck["item_id"])      # that link belongs to another item
+        raise Duplicate(stuck["item_id"],stuck["id"])      # that link belongs to another item
     if stuck:
         _fill_stuck_link(conn, stuck, p)
     else:
@@ -213,7 +216,7 @@ def create_manual_item(conn, name: str, price: float | None, note: str | None = 
     and once the store's price arrives it replaces the typed one."""
     link_url = clean_url(url) if url else None
     if link_url and (known := _known_link(conn, link_url)):
-        raise Duplicate(known["item_id"])     # already saved, even if still stuck
+        raise Duplicate(known["item_id"], known["id"])     # already saved, even if still stuck
 
     cur = conn.execute(
         "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?)",
