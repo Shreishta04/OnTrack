@@ -27,7 +27,7 @@ The lone `--` passes `--host` through npm to Vite. Then:
    ```
    ONTRACK_CORS_ORIGINS=http://localhost:5173,http://<laptop IP>:5173
    ```
-2. On the phone, open the **Network** URL (`http://<laptop IP>:5173`) and set **Settings → server** to `http://<laptop IP>:8000`.
+2. On the phone, open the **Network** URL (`http://<laptop IP>:5173`) and set **Settings → server** to `http://<laptop IP>:8000`. Port **5173** is the app (Vite); port **8000** is the data (uvicorn), so the server setting always ends in `:8000`. Settings are saved per address, so a new network (new IP) means entering it again.
 3. First time on a network: Windows must treat the Wi-Fi as **Private**, and allow ports 5173 and 8000 (see the main README, "Using the iPhone Shortcut with the local server").
 
 The first load on the phone can be slow in development, because Vite sends the app as many small files. A production build (`npm run build`) doesn't have this.
@@ -76,10 +76,10 @@ src/
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── SettingsSheet.tsx  API key and server address
-    └── Icons.tsx          small line icons
+    └── Icons.tsx          small line icons (refresh, moon, sun, sliders, close)
 ```
 
-**How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits.
+**How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits. It also reloads when the page becomes visible again (`visibilitychange`), so changes made elsewhere, like the iPhone's Refresh OnTrack, show up without a manual reload.
 
 ## Conventions
 
@@ -101,4 +101,5 @@ src/
 | `npm` says it can't find `package.json` | Run from the wrong folder | `cd frontend` first |
 | Phone: "Safari can't open the page… stopped responding" | Vite started without `--host`, or Windows Firewall blocking | `npm run dev -- --host`; Wi-Fi set to *Private*; firewall rule for ports 5173 and 8000 |
 | Phone: page opens but "Can't reach the server" | Phone's address missing from `ONTRACK_CORS_ORIGINS`, uvicorn not restarted, or wrong server in Settings | Fix `backend/.env`, restart uvicorn, set Settings → server to `http://<laptop IP>:8000` |
+| Phone: "Can't reach the server at http://127.0.0.1:8000" | New network, so new address: Safari has no saved settings for it and the app used its laptop-only default (`127.0.0.1` means *this device*) | Set Settings → server to `http://<laptop IP>:8000` |
 | Phone: first load takes ages, then everything arrives at once | Development mode sends many small files over Wi-Fi | Wait for the first load, or check a production build (`npm run build` then `npm run preview -- --host`) |

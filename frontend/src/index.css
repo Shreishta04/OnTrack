@@ -800,3 +800,46 @@ input {
   font-size: 14px;
   pointer-events: none;
 }
+
+
+
+/* ============================================================
+   Refresh button and its note
+   ============================================================ */
+
+.icon-btn:disabled {
+  cursor: default;
+}
+.icon-btn.is-spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.header-note {
+  margin: -8px 0 0;
+  align-self: flex-end;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+  animation: fade-up 0.3s var(--ease);
+}
+.header-note.is-warn {
+  color: var(--warn);
+}
+
+/* Three round buttons need a little less room on a phone, so the tagline
+   under "OnTrack" stays on one line. */
+@media (max-width: 420px) {
+  .header-actions {
+    gap: 6px;
+  }
+  .header-actions .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+  .header .eyebrow {
+    letter-spacing: 0.1em;
+  }
+}

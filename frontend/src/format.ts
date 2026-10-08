@@ -1,6 +1,6 @@
 // Small helpers for turning raw data into friendly text.
 
-import type { Item } from './types'
+import type { Item, RefreshResult } from './types' 
 
 // "https://www.amazon.in/dp/…" → "Amazon"
 export function storeName(item: Item): string {
@@ -43,6 +43,22 @@ export function stuckTip(item: Item): string {
     return 'Tap Refresh OnTrack on your iPhone, or share this product from there: the name, photo and price fill in by themselves.'
   }
   return 'OnTrack will try again on the next refresh. Or delete it and use Add by hand with your own price.'
+}
+
+// The short note after tapping refresh, e.g. "Checked 4 · 1 price dropped".
+export function refreshNote(r: RefreshResult): string {
+  const parts: string[] = []
+  if (r.checked > 0) parts.push(`Checked ${r.checked}`)
+  else if (r.skipped_recent > 0) parts.push('All prices were checked in the last hour')
+
+  const dropped = r.changed.filter((c) => c.new_price < c.old_price).length
+  const rose = r.changed.length - dropped
+  if (dropped) parts.push(`${dropped} ${dropped === 1 ? 'price' : 'prices'} dropped`)
+  if (rose) parts.push(`${rose} went up`)
+  if (r.failed.length) parts.push(`${r.failed.length} couldn't be read`)
+  if (r.phone_only > 0) parts.push('Amazon refreshes from your iPhone')
+
+  return parts.join(' · ') || 'Nothing to refresh yet'
 }
 
 // "2026-10-05T11:56:46+00:00" → "5 Oct"
