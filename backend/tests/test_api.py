@@ -481,3 +481,27 @@ def test_short_link_added_by_hand_becomes_the_real_link_after_a_check(client):
     again = client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0ECHODOT5"},
                         files=upload, headers=H)
     assert again.status_code == 409                                          # recognised as a duplicate
+
+
+
+
+def test_server_refresh_skips_phone_only_stores(client):
+    """The server never re-checks Amazon: from a server it gets bot-checked, and
+    a failed check would hold back the phone's refresh of that item for an hour.
+    Amazon prices are refreshed through the phone; other stores by the server."""
+    amazon = client.post("/items/from-link", json={"url": "https://amzn.in/d/watch"}, headers=H).json()
+    client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H)
+
+    asked = []
+    def store(url):
+        asked.append(url)
+        return next(p for p in client.catalogue.values() if p.url == url)
+    main.app.dependency_overrides[main.get_extract] = lambda: store
+
+    r = client.post("/refresh?force=true", headers=H).json()
+    assert asked == ["https://www.savana.com/details/1"]          # Amazon never contacted
+    assert r["checked"] == 1 and r["phone_only"] == 1
+
+    link = client.get(f"/items/{amazon['id']}", headers=H).json()["links"][0]
+    due = client.get("/refresh/phone-list?force=true", headers=H).json()
+    assert [d["link_id"] for d in due] == [link["id"]]             # still the phone's job

@@ -46,9 +46,16 @@ def default_extract(url: str) -> Product:
     # across the threads that refresh() runs extractions on.
     return extract(url, make_fetcher())
 
-def _is_amazon(url: str | None) -> bool:
+# Stores whose pages must be downloaded on the phone, because they block
+# requests from servers (bot-checks). The server never fetches these: not when
+# refreshing, and not as a fallback. If another store starts blocking the
+# server (likely candidates once deployed: Flipkart, Myntra), add it here.
+PHONE_ONLY_STORES = ("amazon.", "amzn.")
+
+
+def needs_phone(url: str | None) -> bool:
     host = urlsplit(url or "").netloc
-    return "amazon." in host or "amzn." in host
+    return any(store in host for store in PHONE_ONLY_STORES)
 
 
 def extract_from_html(html: str, fallback: ExtractFn | None = None) -> ExtractFn:
@@ -56,7 +63,7 @@ def extract_from_html(html: str, fallback: ExtractFn | None = None) -> ExtractFn
     store isn't Amazon, let the server fetch the page itself instead."""
     def run(url: str) -> Product:
         p = extract(url, html_fetcher(url, html))
-        if p.ok or fallback is None or _is_amazon(url) or _is_amazon(p.url):
+        if p.ok or fallback is None or needs_phone(url) or needs_phone(p.url):
             return p
         return fallback(url)
     return run
@@ -373,7 +380,8 @@ def _is_due(last_checked: str | None, force: bool) -> bool:
 
 async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
                   item_id: int | None = None, delay: tuple[float, float] | None = None) -> dict:
-    """Re-check prices. Skips links checked within REFRESH_COOLDOWN unless force=True.
+    """Re-check prices. Skips links checked within REFRESH_COOLDOWN unless force=True,
+    and links from phone-only stores (Amazon), which the phone refreshes instead.
 
     Fetching runs on worker threads (the extractor is ordinary blocking code),
     at most REFRESH_CONCURRENCY at a time, with a small random pause before
@@ -388,6 +396,8 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
         _require_item(conn, item_id)
         query, params = query + " AND links.item_id = ?", (item_id,)
     links = conn.execute(query, params).fetchall()
+    phone_only = [l for l in links if needs_phone(l["url"])]
+    links = [l for l in links if not needs_phone(l["url"])]
 
     due = [l for l in links if _is_due(l["last_checked"], force)]
 
@@ -410,7 +420,7 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
             changes.append({"link_id": link["id"], "old_price": link["price"], "new_price": p.price})
     conn.commit()
     return {"checked": len(due), "skipped_recent": len(links) - len(due),
-            "changed": changes, "failed": failed}
+            "phone_only": len(phone_only), "changed": changes, "failed": failed}
 
 def phone_refresh_list(conn, force: bool = False) -> list[dict]:
     """Amazon links the phone should re-download: not bought, and either due for
@@ -421,7 +431,7 @@ def phone_refresh_list(conn, force: bool = False) -> list[dict]:
         "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' ORDER BY links.id"
     ).fetchall()
     return [{"link_id": r["id"], "url": r["url"]} for r in rows
-            if _is_amazon(r["url"]) and (r["price"] is None or _is_due(r["last_checked"], force))]
+            if needs_phone(r["url"]) and (r["price"] is None or _is_due(r["last_checked"], force))]
 
 
 def refresh_link_from_html(conn, link_id: int, html: str) -> dict:
