@@ -47,3 +47,12 @@ export interface Summary {
   needs_price_count: number
   items: Item[]
 }
+
+// What POST /refresh sends back.
+export interface RefreshResult {
+  checked: number        // pages the server downloaded just now
+  skipped_recent: number // checked in the last hour, so left alone
+  phone_only: number     // Amazon links: the iPhone refreshes those
+  changed: { link_id: number; old_price: number; new_price: number }[]
+  failed: { link_id: number; error: string | null }[]
+}

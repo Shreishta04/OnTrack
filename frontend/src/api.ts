@@ -2,7 +2,7 @@
 // Components never build URLs or headers themselves; they call
 // getSummary(), patchItem() and so on.
 
-import type { Item, Status, Summary } from './types'
+import type { Item, RefreshResult, Status, Summary } from './types'
 
 const SERVER_KEY = 'ontrack.server'
 const API_KEY_KEY = 'ontrack.apiKey'
@@ -55,6 +55,9 @@ export const addManual = (name: string, price: number, url?: string) =>
 
 export const patchItem = (id: number, fields: { status?: Status; name?: string; purchased_price?: number }) =>
   request<Item>(`/items/${id}`, { method: 'PATCH', body: JSON.stringify(fields) })
+
+// Re-check prices on the server (every store except Amazon, which the iPhone does).
+export const refreshPrices = () => request<RefreshResult>('/refresh', { method: 'POST' })
 
 export const deleteItem = (id: number) => request<void>(`/items/${id}`, { method: 'DELETE' })
 
