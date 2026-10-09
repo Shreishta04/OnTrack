@@ -77,3 +77,62 @@ def test_refuses_to_copy_into_a_database_that_has_items(sqlite_list):
     copy_to_postgres.copy(sqlite_list, TEST_PG)
     with pytest.raises(SystemExit, match="already has 3 items"):
         copy_to_postgres.copy(sqlite_list, TEST_PG)        # running it twice can't double the list
+
+
+# ---- the .sql file (for computers that can't connect to Postgres directly) ----
+
+def _run_script(script):
+    """Run the file the way Neon's SQL Editor would: the whole text at once."""
+    import psycopg
+    with psycopg.connect(TEST_PG, autocommit=True) as pg:
+        pg.execute(script)
+
+
+def test_sql_file_gives_the_same_result_as_copying(sqlite_list):
+    script, copied = copy_to_postgres.to_sql(sqlite_list)
+    _run_script(script)
+
+    src, dst = db.connect(sqlite_list), db.PgConnection(TEST_PG)
+    for table in copy_to_postgres.TABLES:
+        assert _dump(dst, table) == _dump(src, table), table
+    assert copied["items"] == 3
+    src.close(), dst.close()
+
+
+def test_sql_file_sets_id_counters_and_refuses_a_second_run(sqlite_list, monkeypatch):
+    import psycopg
+    script, _ = copy_to_postgres.to_sql(sqlite_list)
+    _run_script(script)
+
+    monkeypatch.setenv("DATABASE_URL", TEST_PG)
+    conn = db.connect()
+    assert services.create_manual_item(conn, "Bottle brush", 170) == 5     # same as SQLite would give
+    conn.close()
+
+    with pytest.raises(psycopg.errors.RaiseException, match="already has items"):
+        _run_script(script)                                             # pasting twice can't double the list
+
+
+def test_sql_file_survives_awkward_names(tmp_path, monkeypatch):
+    """Quotes end a SQL string early, and % or ? look like placeholders.
+    Names like these must arrive exactly as typed."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    path = str(tmp_path / "awkward.db")
+    conn = db.connect(path)
+    db.init(conn)
+    names = ["Levi's 'slim' jeans", "100% cotton tee?", "Kurta 🌸 (pack of 2)", "Line one\nline two"]
+    for name in names:
+        services.create_manual_item(conn, name, 499.5, note="it's \"great\"")
+    conn.close()
+    import psycopg
+    with psycopg.connect(TEST_PG) as pg:
+        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings CASCADE")
+
+    script, _ = copy_to_postgres.to_sql(path)
+    _run_script(script)
+
+    dst = db.PgConnection(TEST_PG)
+    rows = dst.execute("SELECT name, note, manual_price FROM items ORDER BY id").fetchall()
+    dst.close()
+    assert [r["name"] for r in rows] == names
+    assert all(r["note"] == "it's \"great\"" and r["manual_price"] == 499.5 for r in rows)

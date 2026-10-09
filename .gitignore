@@ -5,3 +5,4 @@ __pycache__/
 .env
 *.db
 git restore --staged backend/links.txt
+ontrack_copy.sql
