@@ -42,6 +42,64 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="OnTrack API", version="0.1.0", lifespan=lifespan)
 
+
+# Upload size limit. The phone and the extension upload whole store pages
+# (an Amazon page is about 1.7 MB). Without a limit, one huge upload could fill
+# the server's memory or disk. The check runs BEFORE anything else reads the
+# request, even before the API key is checked, so an outsider can't send one
+# either. ONTRACK_MAX_UPLOAD_MB changes the limit.
+MAX_UPLOAD_MB = float(os.getenv("ONTRACK_MAX_UPLOAD_MB", "5"))
+
+
+class LimitRequestSize:
+    """Refuse requests bigger than max_bytes with 413 "Payload Too Large".
+
+    Two checks: the Content-Length header (the size the sender announces),
+    and a running count of the bytes that actually arrive, for senders that
+    don't announce a size or announce the wrong one. When the count goes over,
+    we answer 413 ourselves and tell the app the sender has gone away, so it
+    stops reading (raising an error instead would be caught by FastAPI and
+    turned into a confusing 400)."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app, self.max_bytes = app, max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        announced = dict(scope["headers"]).get(b"content-length", b"")
+        if announced.isdigit() and int(announced) > self.max_bytes:
+            return await self.too_large(send)
+
+        received, answered = 0, False
+
+        async def counting_receive():
+            nonlocal received, answered
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    if not answered:
+                        answered = True
+                        await self.too_large(send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message):
+            if not answered:                 # once we've said 413, the app's own answer is dropped
+                await send(message)
+
+        await self.app(scope, counting_receive, guarded_send)
+
+    async def too_large(self, send):
+        response = JSONResponse(status_code=413, content={
+            "detail": f"That's too big to upload (the limit is {MAX_UPLOAD_MB:g} MB)."})
+        await response({"type": "http"}, None, send)
+
+
+# The form wrapped around a page adds a few hundred bytes; 64 KB is plenty.
+app.add_middleware(LimitRequestSize, max_bytes=int(MAX_UPLOAD_MB * 1024 * 1024) + 64 * 1024)
+
 # CORS: browsers block a web page from calling an API on a different origin
 # (different host or port) unless the API explicitly allows it. The React app
 # will run on localhost:5173 during development, so allow that.

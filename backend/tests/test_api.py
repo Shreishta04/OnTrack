@@ -580,3 +580,53 @@ def test_links_to_private_addresses_are_refused(client):
     r = client.post(f"/items/{item['id']}/links", json={"url": "http://admin.internal/"}, headers=H)
     assert r.status_code == 400
     assert len(client.get("/items", headers=H).json()) == 1         # nothing else was saved
+
+
+def test_uploads_over_the_size_limit_are_refused(client):
+    """A huge upload must be turned away before it fills the server's memory,
+    even without a valid API key. A normal Amazon-sized page (~1.7 MB) still works."""
+    big = b"<html>" + b"x" * (6 * 1024 * 1024) + b"</html>"           # 6 MB, over the 5 MB limit
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/1"},
+                    files={"html": ("page.html", big, "text/html")}, headers=H)
+    assert r.status_code == 413 and "too big" in r.json()["detail"]
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/1"},
+                    files={"html": ("page.html", big, "text/html")}, headers={"X-API-Key": "wrong"})
+    assert r.status_code == 413                                       # refused before the key is even checked
+    assert client.get("/items", headers=H).json() == []
+
+    normal = b"<html>" + b"x" * (1700 * 1024) + b"</html>"           # ~1.7 MB
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/1"},
+                    files={"html": ("page.html", normal, "text/html")}, headers=H)
+    assert r.status_code == 201
+
+
+def test_size_limit_counts_bytes_even_without_a_content_length():
+    """Some senders don't say how big the upload is (chunked uploads). The limit
+    counts the bytes that actually arrive, so leaving the header out doesn't help:
+    the sender gets 413, and the app is told the sender left instead of getting
+    the rest of the body."""
+    import asyncio
+    app_saw = []
+
+    async def app(scope, receive, send):
+        while True:
+            message = await receive()
+            app_saw.append(message["type"])
+            if not message.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 201, "headers": []})   # dropped
+
+    limited = main.LimitRequestSize(app, max_bytes=100)
+    chunks = [{"type": "http.request", "body": b"x" * 60, "more_body": True}] * 3
+    sent = []
+
+    async def receive():
+        return chunks.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(limited({"type": "http", "headers": []}, receive, send))
+    assert app_saw == ["http.request", "http.disconnect"]          # 60 bytes, then "the sender left"
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    assert [m["status"] for m in starts] == [413]                   # only our answer goes out
