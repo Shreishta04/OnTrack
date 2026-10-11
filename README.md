@@ -2,7 +2,9 @@
 
 > A budget-aware wishlist for Indian online shopping. Share or paste a product link from any store, and OnTrack pulls the product name and price automatically, totals everything you plan to buy, and shows what's left of your monthly budget.
 
-**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local, laptop + phone) · Browser extension ✅ (Chrome / Edge) · Deployment ⏳
+[![Tests](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml/badge.svg)](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml)
+
+**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local, laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres-ready ✅ · Deployment ⏳
 
 ---
 
@@ -85,14 +87,14 @@ React web app (laptop / phone browser) ── JSON ─────────�
                                                  FastAPI backend (Python)
                                                   ├── main.py       HTTP layer: routes, validation, auth, error → status code
                                                   ├── services.py   Business rules: lists, budget, cheapest link, refresh
-                                                  ├── db.py         Database tables and connections
+                                                  ├── db.py         Tables and connections (SQLite or Postgres)
                                                   └── extractor.py  Page → name, price, MRP, image
                                                                     │
                                                                     ▼
-                                                   SQLite (local) → Postgres (when hosted)
+                                  SQLite (my laptop)  or  Postgres (deployed), picked by DATABASE_URL
 ```
 
-The layers are kept separate on purpose. `services.py` doesn't know about HTTP, so its rules can be tested directly and reused (for example by a future bot). All SQL lives in `db.py` and `services.py`, so moving from SQLite to Postgres is a contained change.
+The layers are kept separate on purpose. `services.py` doesn't know about HTTP, so its rules can be tested directly and reused (for example by a future bot). All SQL lives in `db.py` and `services.py`, so moving from SQLite to Postgres was a contained change: `services.py` and `main.py` didn't change at all (Challenge 25).
 
 **Fetching is separate from parsing.** The extractor never downloads anything itself; it calls whatever *fetcher* it is given. On the laptop that's a Chrome-like downloader. For pages the phone (or the browser extension) already has, it's a fetcher that simply hands back the uploaded page and refuses to go online for anything else. The same parsers run either way, which is what made phone-side fetching, and later the browser extension, small changes: the extension needed only one backend addition.
 
@@ -125,7 +127,9 @@ Deleting an item removes its links, price history and status history with it (`O
 | Fetching | **curl_cffi** (laptop/server) · **the iPhone itself** (Amazon) | See "Challenges" below |
 | Parsing | **BeautifulSoup + lxml**, regex for embedded JSON | Standard, robust HTML parsing |
 | Uploads | **python-multipart** | Lets FastAPI read the page the phone uploads as a file |
-| Database | **SQLite** now → **Postgres** when hosted | SQLite needs no setup locally; hosted servers don't keep local files, so production needs a separate database. Switching early was considered during the "server freezes" bug and rejected: the real cause was in my code (Challenge 16) |
+| Database | **SQLite** locally, **Postgres** when hosted (one setting, `DATABASE_URL`) | SQLite needs no setup locally; hosted servers don't keep local files, so production needs a separate database. Switching early was considered during the "server freezes" bug and rejected: the real cause was in my code (Challenge 16) |
+| Postgres driver | **psycopg 3** | The standard Python driver for Postgres. Only loaded when `DATABASE_URL` is set, so the laptop never needs it |
+| Automated tests | **GitHub Actions** | Runs every test on SQLite **and** a real Postgres 16 on every push, plus the frontend build and lint, on Linux. My work laptop can't run Postgres (Challenge 26), so this is where the Postgres half is checked |
 | Frontend | **React + TypeScript**, built with **Vite** | Browsers only run JavaScript; React is the most widely used UI library, and TypeScript catches mistakes (a misspelled field, a missing prop) while typing. Vite creates the project in one command and reloads the page instantly on save |
 | Styling | **Plain CSS with variables** (design tokens) | Every colour is a variable defined once for light and once for dark, so dark mode needs no component changes. No CSS framework, so the look stays deliberate and the code stays readable |
 | Linting | **Oxlint** | Vite's default; fast, no setup |
@@ -366,6 +370,40 @@ Setting up the backend from scratch (`pip install -r requirements.txt`) crashed 
 - **Tested before I saw it:** the real extension ran in headless Chromium against the real backend and a tiny fake store: add, already saved → update price (₹1,200 → ₹999), no-price page → remove.
 - **Unzipped one level too deep:** Windows' *Extract All* made `extension/extension/manifest.json`, which Chrome couldn't load, and I'd already committed it. Fixed with a second commit that moves the files up; git recorded it as renames.
 
+### 25. One codebase, two databases
+
+**Goal:** the same code runs on SQLite (my laptop) or Postgres (once deployed), picked by one setting, `DATABASE_URL`. If it isn't set, everything works exactly as before, so if the deployment ever goes wrong, removing it takes me back to SQLite.
+
+**What was different between the two:**
+- **New ids.** The code read a new row's id with `cursor.lastrowid`, which Postgres doesn't have. **Fix:** `INSERT … RETURNING id`, which both databases understand.
+- **Placeholders.** SQLite writes `WHERE id = ?`; psycopg (the Postgres driver) writes `%s`. **Fix:** a small wrapper in `db.py`, `PgConnection`, that looks like the SQLite connection to the rest of the code and translates on the way through. `services.py` and `main.py` didn't change.
+- **A hidden trap:** the rename rule uses `LIKE 'http%'`. To psycopg, a lone `%` means "a value goes here", so that query would crash on Postgres. **Fix:** the wrapper writes a real `%` as `%%` first, then turns `?` into `%s`. A test failed on Postgres when I removed this on purpose, so it's guarded.
+- **Counting ids.** SQLite's `AUTOINCREMENT` is `GENERATED BY DEFAULT AS IDENTITY` on Postgres. The Postgres tables are made from the **same** schema with that one phrase swapped, so there's one copy of every table, not two.
+
+**Tests run on both.** Every API test runs twice, `[sqlite]` and `[postgres]`. Without a test database (`TEST_DATABASE_URL`) the Postgres half is skipped, so the tests still work on any laptop. Two tests needed a decision: the "database locked" test guards a **SQLite-only** problem (Postgres locks single rows, not the whole file), so it's skipped on Postgres; the "moves are recorded" test opened the SQLite file directly, so it now goes through `db.connect()` and runs on both.
+
+**Moving my data.** `copy_to_postgres.py` copies `ontrack.db` into an empty Postgres, **keeping every id**, so links still point at the right items and the Shortcuts' link ids stay the same. Its test caught two bugs:
+- After inserting rows *with* ids, Postgres doesn't move its id counter, so the first new item was given id 1, which already existed (*"Key (id)=(1) already exists"*). **Fix:** set each counter after copying.
+- My first fix set the counter to the highest id, but SQLite **never reuses** a deleted item's id, so my copy handed out an id SQLite never would. **Fix:** copy SQLite's own counters (kept in a hidden table, `sqlite_sequence`).
+
+It all runs in one transaction (saved together or not at all), refuses to copy into a database that already has items, and checks that every table has the same number of rows on both sides.
+
+**Slips worth remembering:**
+- Replacing `lastrowid`, I left the old insert above the new one, so every item was saved **twice**. Two tests that count items caught it straight away (`assert 2 == 1`).
+- I committed Step 1 while on `main` instead of the feature branch. Nothing had been pushed, so I moved it: `git switch feature/postgres`, `git merge --ff-only main`, then `git branch -f main origin/main`. **Habit:** read the first line of `git status` (*On branch …*) before committing.
+
+### 26. My work laptop can't run Postgres
+
+**Symptom:** after adding psycopg, the tests crashed before running: *"DLL load failed… An Application Control policy has blocked this file."* Installing PostgreSQL itself then failed with *"The database cluster initialisation failed"*.
+
+**Cause:** the laptop has Windows **Smart App Control**, which only lets files run if they're signed by a known publisher. The installers are signed, but some of the smaller files they bring along aren't, so Windows blocked them. It can't be relaxed for one app, turning it off is permanent, and on a work laptop it isn't my call anyway.
+
+**Fix (working around the laptop, not through it):**
+- **The tests:** psycopg is only imported where Postgres is actually used, so on my laptop the Postgres tests are **skipped**, not crashed. **GitHub Actions** runs all of them on every push, on Linux, with a real Postgres 16 next to them.
+- **Moving my data:** `copy_to_postgres.py --sql-out ontrack_copy.sql` writes the whole copy as a plain `.sql` file, which needs nothing but Python. At deploy time I paste it into Neon's SQL Editor in the browser. It keeps every safety check of the direct copy, wrapped in one `DO` block that Postgres runs all-or-nothing. In SQL, text sits inside single quotes, so a name like *Levi's* would end it early; the script writes a quote twice (`'Levi''s'`), and a test checks that names with quotes, `%`, `?`, emoji and line breaks arrive exactly as typed. The file holds my whole list, so it's in `.gitignore`.
+
+**A slip:** the first workflow file reached GitHub **empty** (created in VS Code but never filled), and the run failed instantly. `git diff --stat` before committing shows how many lines each file changed; 0 lines on a file I meant to fill is the giveaway.
+
 ### Known limits
 
 - **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
@@ -376,6 +414,7 @@ Setting up the backend from scratch (`pip install -r requirements.txt`) crashed 
 - **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
 - **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
+- **Postgres isn't tested on my laptop:** Smart App Control blocks it (Challenge 26), so locally the Postgres half of the tests is skipped. GitHub Actions runs it on every push; check the badge at the top before merging.
 - **Local IP address:** while running on the laptop, the Shortcuts and the phone's server setting point at the laptop's Wi-Fi address, which is different at home and at the office (and the app's saved settings don't carry over between addresses). Deployment gives the server one fixed address.
 
 ### Found while using it, to fix later
@@ -423,6 +462,29 @@ pytest -q
 uvicorn main:app --reload
 ```
 Open http://127.0.0.1:8000/docs to try every endpoint in the browser.
+
+On a laptop without Postgres, `pytest` says something like *49 passed, 37 skipped*: the skipped ones are the Postgres half, which GitHub Actions runs on every push.
+
+### Using Postgres instead of SQLite
+
+Set `DATABASE_URL` (in `backend/.env` or the host's settings) and the app uses Postgres; the tables are created on first start. Leave it unset for SQLite.
+
+```
+DATABASE_URL=postgresql://user:password@host/dbname
+```
+
+To run the Postgres tests too, point `TEST_DATABASE_URL` at an **empty** database (its tables are wiped before each test):
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://user:password@localhost/ontrack_test"
+pytest -q
+```
+
+To move an existing `ontrack.db` into an empty Postgres:
+```powershell
+python copy_to_postgres.py "postgresql://user:password@host/dbname"     # if this computer can connect
+python copy_to_postgres.py --sql-out ontrack_copy.sql                   # otherwise: paste the file into the database's SQL editor
+```
+Both keep every id and check row counts; both refuse if the database already has items. `ontrack_copy.sql` contains the whole list: it's git-ignored, and worth deleting after use.
 
 ### The web app
 
@@ -534,12 +596,15 @@ All endpoints except `/health` require the `X-API-Key` header.
 
 ```
 OnTrack/
+├── .github/workflows/
+│   └── tests.yml          GitHub Actions: tests on SQLite + Postgres, frontend build + lint
 ├── backend/
 │   ├── main.py            FastAPI routes
 │   ├── services.py        business logic
-│   ├── db.py              SQLite schema
+│   ├── db.py              schema; SQLite or Postgres (DATABASE_URL)
 │   ├── extractor.py       page → product details
-│   ├── tests/             offline tests (fake pages, fake extractor), 49 passing
+│   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
+│   ├── tests/             offline tests (fake pages, fake extractor): 85, half of them run on SQLite and Postgres
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -594,12 +659,17 @@ OnTrack/
 - [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
 - [x] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`; Update price for saved items; Remove for pages without a price
 - [ ] Installable PWA (home-screen icon, app name, offline shell)
-- [ ] Deploy: frontend (Vercel), backend (always-on host), Postgres; fix the UTC month boundary; `/refresh` skips Amazon; refresh non-Amazon prices when the app opens
+- [x] Postgres support: one setting (`DATABASE_URL`) picks SQLite or Postgres; tests run on both; a script copies my data across, keeping ids
+- [x] GitHub Actions: every push runs the tests on SQLite and Postgres, and builds and lints the frontend
+- [ ] Hardening before going public: block private/internal addresses (SSRF), upload size limit, rate limiting, month boundary in India time
+- [ ] Deploy: web app on Vercel, backend on Railway (free plan, $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [ ] Rethink "Over budget" (each item on its own, or in priority order?)
 - [ ] Flipkart MRP (the struck-through price)
 - [ ] Accounts, so several people can use one deployed OnTrack (each with their own list and budget)
+
+- [ ] Budget periods: choose weekly, monthly or yearly; see past periods with their budget and what I spent
 
 **Parked ideas**
 - Native Android app with Flutter (installs as an APK on Android; an iPhone build would need a Mac, so the iPhone gets the PWA)
@@ -650,3 +720,10 @@ OnTrack/
 - Phone round from the office: hit the per-address settings and CORS (Challenge 23); then ↻ worked on laptop and phone, and after *Refresh OnTrack* the list updated by itself on switching back to Safari
 - `feature/browser-extension`: agreed the popup's look in a mockup (six states), then built a Manifest V3 extension in plain JavaScript; the `409` reply now carries `link_id` for **Update price**. Ran the real extension in headless Chromium against the backend and a fake store before handing it over, which caught a settings-ordering bug. 49 tests passing
 - Tried it on real pages: Amazon added from the laptop with no bot-check, plus Flipkart and Littlebox; Update price and Remove work. Fixed a folder that Windows had unzipped one level too deep
+
+**2026-10-09**
+- `feature/postgres`: portable SQL (`RETURNING id`, `DOUBLE PRECISION`), then a `DATABASE_URL` switch with a small wrapper so `services.py` didn't change; found the `%` placeholder trap in `LIKE 'http%'`. Every API test now runs on SQLite and Postgres
+- Recovered a commit made on `main` by mistake (fast-forward onto the feature branch, reset `main`)
+- Wrote `copy_to_postgres.py`; its test caught the id counter not moving after a copy, and then ids of deleted items being reused
+- Found that my work laptop's Smart App Control blocks psycopg and a local Postgres install; added `--sql-out` (paste the copy into Neon's SQL Editor) and GitHub Actions, which runs all 85 tests with a real Postgres on every push. First green run
+- Chose Railway's free plan for the backend after measuring the server: about 58 MB of RAM and 2 ms of CPU per `/summary`, roughly $0.60–0.70 of the $1 monthly credit even if always on, with the database on Neon
