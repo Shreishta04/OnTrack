@@ -1,10 +1,17 @@
-"""API tests: a real FastAPI app and real SQLite database (a temp file),
-but a fake extractor, so no store is ever contacted."""
+"""API tests: a real FastAPI app and a real database, but a fake extractor,
+so no store is ever contacted.
+
+Every test runs twice: on SQLite (a temp file) and on Postgres. The Postgres
+run needs TEST_DATABASE_URL (an empty test database, wiped before each test);
+without it, those runs are skipped, so the tests still work on any laptop."""
+
+import os
 
 import pytest
 from fastapi.testclient import TestClient
 
 import sqlite3
+import db
 import main
 import services
 from extractor import Product, clean_url
@@ -25,10 +32,27 @@ CATALOGUE = {
 }
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
+TEST_PG = os.getenv("TEST_DATABASE_URL")
+
+
+def _wipe_postgres(url):
+    """Start each Postgres test from empty tables, like a fresh SQLite file."""
+    import psycopg
+    with psycopg.connect(url) as conn:
+        conn.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings CASCADE")
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def client(request, tmp_path, monkeypatch):
     monkeypatch.setenv("ONTRACK_API_KEY", KEY)
-    monkeypatch.setenv("ONTRACK_DB", str(tmp_path / "test.db"))
+    if request.param == "postgres":
+        if not TEST_PG:
+            pytest.skip("TEST_DATABASE_URL not set")
+        _wipe_postgres(TEST_PG)
+        monkeypatch.setenv("DATABASE_URL", TEST_PG)
+    else:
+        monkeypatch.delenv("DATABASE_URL", raising=False)   # even if .env sets one
+        monkeypatch.setenv("ONTRACK_DB", str(tmp_path / "test.db"))
     monkeypatch.setattr(services, "REFRESH_DELAY", (0, 0))
     catalogue = dict(CATALOGUE)
 
@@ -41,6 +65,7 @@ def client(tmp_path, monkeypatch):
     main.app.dependency_overrides[main.get_extract] = lambda: fake_extract
     with TestClient(main.app) as c:          # `with` runs startup (creates tables)
         c.catalogue = catalogue              # tests can change "store prices"
+        c.backend = request.param            # "sqlite" or "postgres"
         yield c
     main.app.dependency_overrides.clear()
 
@@ -149,12 +174,13 @@ def test_status_moves_are_logged(client, tmp_path):
     client.patch(url, json={"status": "later"}, headers=H)      # already later: must NOT be logged
     client.patch(url, json={"status": "planned"}, headers=H)
 
-    conn = sqlite3.connect(tmp_path / "test.db")
+    conn = db.connect()                      # whichever database this run uses
     rows = conn.execute(
         "SELECT from_status, to_status FROM status_changes WHERE item_id = ? ORDER BY id",
         (item["id"],)).fetchall()
     conn.close()
-    assert rows == [(None, "planned"), ("planned", "later"), ("later", "planned")]
+    moves = [(r["from_status"], r["to_status"]) for r in rows]
+    assert moves == [(None, "planned"), ("planned", "later"), ("later", "planned")]
 
 
 def test_mark_bought_saves_price_and_date_undo_clears(client):
@@ -301,7 +327,10 @@ def test_phone_refresh_list_and_upload(client):
 def test_database_not_locked_while_store_page_downloads(client, tmp_path):
     """While we wait for a slow store, other changes (like editing the budget)
     must still work. Before the fix, adding a link locked the database for the
-    whole download, and every other change failed with 'database is locked'."""
+    whole download, and every other change failed with 'database is locked'.
+    SQLite only: Postgres locks single rows, not the whole database."""
+    if client.backend == "postgres":
+        pytest.skip("SQLite-only problem")
     results = []
 
     def slow_store(url):
