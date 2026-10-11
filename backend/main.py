@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -99,6 +101,76 @@ class LimitRequestSize:
 
 # The form wrapped around a page adds a few hundred bytes; 64 KB is plenty.
 app.add_middleware(LimitRequestSize, max_bytes=int(MAX_UPLOAD_MB * 1024 * 1024) + 64 * 1024)
+
+
+# Rate limiting: at most N requests a minute from one address. A leaked key, a
+# Shortcut stuck in a loop or someone hammering the server can't burn through
+# the hosting credit or get my server blocked by the stores. "Heavy" requests
+# make the server download store pages, so they get a much lower limit.
+RATE_LIMIT = int(os.getenv("ONTRACK_RATE_LIMIT", "60"))              # per minute, any request
+RATE_LIMIT_HEAVY = int(os.getenv("ONTRACK_RATE_LIMIT_HEAVY", "10"))  # per minute, page downloads
+HEAVY_REQUESTS = re.compile(r"^POST (/items/from-link|/items/from-html|/items/\d+/links"
+                            r"|/refresh|/items/\d+/refresh)$")
+
+
+class RateLimiter:
+    """Remembers when each address made its recent requests ("sliding window":
+    always the last 60 seconds, not "this calendar minute", so a burst can't
+    straddle two minutes to get double).
+
+    Kept in memory: fine for one server process. If OnTrack ever runs on several
+    servers at once, this would need a shared store such as Redis."""
+
+    def __init__(self, clock=time.monotonic, window: float = 60.0):
+        self.clock, self.window = clock, window
+        self.hits: dict[tuple[str, str], deque] = defaultdict(deque)
+
+    def allow(self, key: str, bucket: str, limit: int) -> float:
+        """0 if the request may go ahead, else seconds until it would be allowed."""
+        now = self.clock()
+        hits = self.hits[(key, bucket)]
+        while hits and hits[0] <= now - self.window:      # forget requests older than the window
+            hits.popleft()
+        if len(hits) >= limit:
+            return hits[0] + self.window - now
+        hits.append(now)
+        if len(self.hits) > 10_000:                       # don't let many addresses fill the memory
+            self.hits = defaultdict(deque, {k: v for k, v in self.hits.items() if v})
+        return 0.0
+
+    def reset(self) -> None:
+        self.hits.clear()
+
+
+rate_limiter = RateLimiter()
+
+
+class LimitRequestRate:
+    """Answers 429 "Too Many Requests" (with Retry-After: seconds to wait) once
+    an address goes over the limit. Runs before the upload is read and before
+    the API key is checked, so refused requests cost almost nothing."""
+
+    def __init__(self, app, limiter: RateLimiter):
+        self.app, self.limiter = app, limiter
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] == "/health" or scope["method"] == "OPTIONS":
+            return await self.app(scope, receive, send)
+        # On Railway, the real address comes from the proxy in front of the server:
+        # uvicorn must be started with --proxy-headers (see README, Deploy).
+        who = (scope.get("client") or ("unknown", 0))[0]
+        wait = self.limiter.allow(who, "all", RATE_LIMIT)
+        if not wait and HEAVY_REQUESTS.match(f"{scope['method']} {scope['path']}"):
+            wait = self.limiter.allow(who, "heavy", RATE_LIMIT_HEAVY)
+        if wait:
+            response = JSONResponse(
+                status_code=429, headers={"Retry-After": str(int(wait) + 1)},
+                content={"detail": f"Too many requests. Try again in {int(wait) + 1} s."})
+            return await response(scope, receive, send)
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(LimitRequestRate, limiter=rate_limiter)
 
 # CORS: browsers block a web page from calling an API on a different origin
 # (different host or port) unless the API explicitly allows it. The React app

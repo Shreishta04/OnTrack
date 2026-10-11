@@ -75,6 +75,7 @@ def client(request, tmp_path, monkeypatch):
 
     main.app.dependency_overrides[main.get_extract] = lambda: fake_extract
     main.app.dependency_overrides[main.get_resolver] = lambda: fake_resolve
+    main.rate_limiter.reset()                # each test starts with a fresh request count
     with TestClient(main.app) as c:          # `with` runs startup (creates tables)
         c.catalogue = catalogue              # tests can change "store prices"
         c.backend = request.param            # "sqlite" or "postgres"
@@ -630,3 +631,31 @@ def test_size_limit_counts_bytes_even_without_a_content_length():
     assert app_saw == ["http.request", "http.disconnect"]          # 60 bytes, then "the sender left"
     starts = [m for m in sent if m["type"] == "http.response.start"]
     assert [m["status"] for m in starts] == [413]                   # only our answer goes out
+
+
+def test_too_many_requests_get_429(client, monkeypatch):
+    """Over the limit, requests are refused with 429 and told how long to wait."""
+    monkeypatch.setattr(main, "RATE_LIMIT_HEAVY", 3)
+    for _ in range(3):
+        assert client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"},
+                           headers=H).status_code in (201, 409)
+    r = client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H)
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1
+    assert client.get("/summary", headers=H).status_code == 200      # light requests still work
+
+    monkeypatch.setattr(main, "RATE_LIMIT", 5)
+    codes = [client.get("/summary", headers=H).status_code for _ in range(6)]
+    assert codes.count(429) >= 1                                      # the general limit too
+    assert client.get("/health").status_code == 200                   # the health check is never limited
+
+
+def test_rate_limit_window_slides_and_counts_each_address_separately():
+    now = [0.0]
+    limiter = main.RateLimiter(clock=lambda: now[0])
+    assert all(limiter.allow("1.2.3.4", "heavy", 2) == 0 for _ in range(2))
+    assert limiter.allow("1.2.3.4", "heavy", 2) > 0                   # third in the same minute
+    assert limiter.allow("5.6.7.8", "heavy", 2) == 0                  # someone else isn't affected
+    now[0] = 59.0
+    assert limiter.allow("1.2.3.4", "heavy", 2) > 0                   # still inside the last 60 s
+    now[0] = 60.5
+    assert limiter.allow("1.2.3.4", "heavy", 2) == 0                  # the first two have expired
