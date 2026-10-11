@@ -659,3 +659,34 @@ def test_rate_limit_window_slides_and_counts_each_address_separately():
     assert limiter.allow("1.2.3.4", "heavy", 2) > 0                   # still inside the last 60 s
     now[0] = 60.5
     assert limiter.allow("1.2.3.4", "heavy", 2) == 0                  # the first two have expired
+
+def test_spent_this_month_follows_india_time_not_utc(client, monkeypatch):
+    """Stored times are UTC, which is 5.5 hours behind India. A purchase at 00:30
+    on 1 Nov in India is still 31 Oct in UTC: it belongs to November's budget."""
+    from datetime import datetime, timezone
+    def at(stamp):
+        monkeypatch.setattr(services, "_utcnow", lambda: datetime.fromisoformat(stamp))
+
+    client.put("/budget", json={"amount": 5000}, headers=H)
+    late = client.post("/items", json={"name": "Late-night kurta", "price": 700}, headers=H).json()
+    early = client.post("/items", json={"name": "Halloween mask", "price": 300}, headers=H).json()
+    at("2026-10-31T19:00:00+00:00")                       # 1 Nov, 00:30 in India
+    client.patch(f"/items/{late['id']}", json={"status": "purchased"}, headers=H)
+    at("2026-10-31T18:00:00+00:00")                       # 31 Oct, 23:30 in India
+    client.patch(f"/items/{early['id']}", json={"status": "purchased"}, headers=H)
+
+    at("2026-11-05T06:00:00+00:00")                       # looking at the app on 5 Nov
+    assert client.get("/summary", headers=H).json()["spent_this_month"] == 700
+
+    monkeypatch.setenv("ONTRACK_TIMEZONE", "UTC")         # the old behaviour, for contrast
+    assert client.get("/summary", headers=H).json()["spent_this_month"] == 0
+
+
+def test_a_misspelt_time_zone_stops_the_server_at_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv("ONTRACK_API_KEY", KEY)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ONTRACK_DB", str(tmp_path / "tz.db"))
+    monkeypatch.setenv("ONTRACK_TIMEZONE", "Asia/Kolkatta")
+    with pytest.raises(RuntimeError, match="isn't a time zone"):
+        with TestClient(main.app):
+            pass

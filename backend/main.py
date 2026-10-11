@@ -36,6 +36,11 @@ load_dotenv()   # reads settings from .env (kept out of git) into environment va
 async def lifespan(app: FastAPI):
     if not os.getenv("ONTRACK_API_KEY"):
         raise RuntimeError("ONTRACK_API_KEY is not set. Copy .env.example to .env and set it.")
+    try:
+        services.local_zone()          # a typo here would quietly make every month wrong
+    except Exception:
+        raise RuntimeError(f"ONTRACK_TIMEZONE={os.getenv('ONTRACK_TIMEZONE')!r} isn't a time zone "
+                           "name. Use one like Asia/Kolkata or America/New_York.") from None
     conn = db.connect()
     db.init(conn)        # create tables on first run
     conn.close()
