@@ -34,8 +34,13 @@ load_dotenv()   # reads settings from .env (kept out of git) into environment va
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not os.getenv("ONTRACK_API_KEY"):
+    key = os.getenv("ONTRACK_API_KEY", "")
+    if not key:
         raise RuntimeError("ONTRACK_API_KEY is not set. Copy .env.example to .env and set it.")
+    if len(key) < MIN_KEY_LENGTH or key == "change-me":
+        raise RuntimeError(f"ONTRACK_API_KEY is too easy to guess (use at least {MIN_KEY_LENGTH} "
+                           "characters). Make one with: "
+                           "python -c \"import secrets; print(secrets.token_urlsafe(32))\"")
     try:
         services.local_zone()          # a typo here would quietly make every month wrong
     except Exception:
@@ -47,7 +52,15 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="OnTrack API", version="0.1.0", lifespan=lifespan)
+MIN_KEY_LENGTH = 24
+
+# The interactive docs (/docs) list every endpoint. Handy on the laptop; on the
+# internet they're a map for strangers, so ONTRACK_DOCS=off hides them.
+SHOW_DOCS = os.getenv("ONTRACK_DOCS", "on").lower() not in ("off", "0", "false", "no")
+app = FastAPI(title="OnTrack API", version="0.1.0", lifespan=lifespan,
+              docs_url="/docs" if SHOW_DOCS else None,
+              redoc_url="/redoc" if SHOW_DOCS else None,
+              openapi_url="/openapi.json" if SHOW_DOCS else None)
 
 
 # Upload size limit. The phone and the extension upload whole store pages
@@ -114,8 +127,29 @@ app.add_middleware(LimitRequestSize, max_bytes=int(MAX_UPLOAD_MB * 1024 * 1024) 
 # make the server download store pages, so they get a much lower limit.
 RATE_LIMIT = int(os.getenv("ONTRACK_RATE_LIMIT", "60"))              # per minute, any request
 RATE_LIMIT_HEAVY = int(os.getenv("ONTRACK_RATE_LIMIT_HEAVY", "10"))  # per minute, page downloads
+# Also for page downloads, but counted across ALL addresses together: even if
+# someone found a way to look like many different addresses, the server as a
+# whole still downloads at most this many pages a minute.
+RATE_LIMIT_HEAVY_TOTAL = int(os.getenv("ONTRACK_RATE_LIMIT_HEAVY_TOTAL", "30"))
+# Pages the phone uploads for Refresh: no download, but each 5 MB page takes
+# seconds of CPU to read, so they get their own limit (a 15-item refresh fits).
+RATE_LIMIT_UPLOADS = int(os.getenv("ONTRACK_RATE_LIMIT_UPLOADS", "30"))
 HEAVY_REQUESTS = re.compile(r"^POST (/items/from-link|/items/from-html|/items/\d+/links"
                             r"|/refresh|/items/\d+/refresh)$")
+UPLOAD_REQUESTS = re.compile(r"^POST /links/\d+/from-html$")
+# Behind Railway, every request arrives from Railway's proxy, which writes the
+# real address at the END of the X-Forwarded-For header. Anything before it
+# was written by the sender and can be made up, so only the last entry counts.
+TRUST_PROXY = os.getenv("ONTRACK_TRUST_PROXY", "off").lower() in ("on", "1", "true", "yes")
+
+
+def client_address(scope) -> str:
+    direct = (scope.get("client") or ("unknown", 0))[0]
+    if not TRUST_PROXY:
+        return direct
+    forwarded = dict(scope["headers"]).get(b"x-forwarded-for", b"").decode("latin-1")
+    last = forwarded.rsplit(",", 1)[-1].strip()
+    return last or direct
 
 
 class RateLimiter:
@@ -161,12 +195,14 @@ class LimitRequestRate:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["path"] == "/health" or scope["method"] == "OPTIONS":
             return await self.app(scope, receive, send)
-        # On Railway, the real address comes from the proxy in front of the server:
-        # uvicorn must be started with --proxy-headers (see README, Deploy).
-        who = (scope.get("client") or ("unknown", 0))[0]
+        who = client_address(scope)
+        request = f"{scope['method']} {scope['path']}"
         wait = self.limiter.allow(who, "all", RATE_LIMIT)
-        if not wait and HEAVY_REQUESTS.match(f"{scope['method']} {scope['path']}"):
-            wait = self.limiter.allow(who, "heavy", RATE_LIMIT_HEAVY)
+        if not wait and HEAVY_REQUESTS.match(request):
+            wait = (self.limiter.allow(who, "heavy", RATE_LIMIT_HEAVY)
+                    or self.limiter.allow("everyone", "heavy", RATE_LIMIT_HEAVY_TOTAL))
+        if not wait and UPLOAD_REQUESTS.match(request):
+            wait = self.limiter.allow(who, "uploads", RATE_LIMIT_UPLOADS)
         if wait:
             response = JSONResponse(
                 status_code=429, headers={"Retry-After": str(int(wait) + 1)},
@@ -266,9 +302,14 @@ class BudgetIn(BaseModel):
     amount: float = Field(..., ge=0, examples=[15000])
 
 
+# Length limits: one request shouldn't be able to store megabytes of text
+# (the free database holds 1 GB).
+NAME_MAX, NOTE_MAX = 300, 2000
+
+
 class FromLinkIn(BaseModel):
     url: HttpUrl
-    name: str | None = Field(None, description="Optional; defaults to the product's title")
+    name: str | None = Field(None, max_length=NAME_MAX, description="Optional; defaults to the product's title")
     priority: int = 0
 
 
@@ -280,9 +321,9 @@ class FromHtmlIn(BaseModel):
 
 
 class ManualItemIn(BaseModel):
-    name: str = Field(..., min_length=1, examples=["Charm bracelet"])
+    name: str = Field(..., min_length=1, max_length=NAME_MAX, examples=["Charm bracelet"])
     price: float | None = Field(None, ge=0, examples=[1500])
-    note: str | None = None
+    note: str | None = Field(None, max_length=NOTE_MAX)
     priority: int = 0
     url: HttpUrl | None = None      # optional store link, saved without contacting the store
 
@@ -292,11 +333,11 @@ class LinkIn(BaseModel):
 
 
 class ItemPatch(BaseModel):
-    name: str | None = Field(None, min_length=1)
+    name: str | None = Field(None, min_length=1, max_length=NAME_MAX)
     status: Literal["planned", "later", "purchased"] | None = None
     priority: int | None = None
     manual_price: float | None = Field(None, ge=0)
-    note: str | None = None
+    note: str | None = Field(None, max_length=NOTE_MAX)
     purchased_price: float | None = Field(None, ge=0)
 
 
@@ -353,7 +394,7 @@ def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_e
 
 @app.post("/items/from-html", status_code=201, dependencies=auth)
 def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
-                   name: str | None = Form(None), priority: int = Form(0),
+                   name: str | None = Form(None, max_length=NAME_MAX), priority: int = Form(0),
                    conn=Depends(get_db), extract=Depends(get_extract)):
     """The phone fetched the page and uploads it here. Non-Amazon pages fall back to a server fetch."""
     page = html.file.read().decode("utf-8", errors="replace")

