@@ -15,7 +15,9 @@ from __future__ import annotations
 import asyncio
 import random
 import sqlite3
+import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -40,8 +42,32 @@ class Duplicate(Exception):
         self.link_id = link_id
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)        # tests replace this to pretend it's another day
+
+
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    """The time to store. Always UTC: one unambiguous clock in the database,
+    turned into local time only when a person's calendar matters."""
+    return _utcnow().isoformat(timespec="seconds")
+
+
+def local_zone() -> ZoneInfo:
+    """Whose calendar "this month" follows. ONTRACK_TIMEZONE takes a name from
+    the time zone database ("Asia/Kolkata", "America/New_York"). One setting
+    for the whole app until accounts give each person their own."""
+    return ZoneInfo(os.getenv("ONTRACK_TIMEZONE", "Asia/Kolkata"))
+
+
+def local_month(stamp: str | None, zone: ZoneInfo) -> str | None:
+    """'2026-10-31T19:00:00+00:00' -> '2026-11' in India (it's already 00:30 on
+    1 Nov there), but '2026-10' in UTC."""
+    if not stamp:
+        return None
+    moment = datetime.fromisoformat(stamp)
+    if moment.tzinfo is None:                # written without a zone: it was UTC
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone).strftime("%Y-%m")
 
 
 def default_extract(url: str) -> Product:
@@ -344,9 +370,10 @@ def summary(conn) -> dict:
     """The numbers at the top of the app."""
     budget = get_budget(conn)
     items = list_items(conn)
-    month = now()[:7]                                   # e.g. "2026-10"
+    zone = local_zone()
+    month = _utcnow().astimezone(zone).strftime("%Y-%m")      # this month on MY calendar
     spent = sum(i["purchased_price"] or 0 for i in items
-                if i["status"] == "purchased" and (i["purchased_at"] or "").startswith(month))
+                if i["status"] == "purchased" and local_month(i["purchased_at"], zone) == month)
     planned = [i for i in items if i["status"] == "planned" and i["price"] is not None]
     # Walk planned items in priority order and mark which still fit the budget.
     running, fits = spent, {}

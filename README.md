@@ -404,9 +404,31 @@ It all runs in one transaction (saved together or not at all), refuses to copy i
 
 **A slip:** the first workflow file reached GitHub **empty** (created in VS Code but never filled), and the run failed instantly. `git diff --stat` before committing shows how many lines each file changed; 0 lines on a file I meant to fill is the giveaway.
 
+### 27. Before going public: hardening
+
+Until now the server only listened inside my home Wi-Fi. On Railway, anyone on the internet can reach it. The API key still protects every endpoint, but four things had to change first, each with tests that fail without the fix.
+
+**1. Only public websites (SSRF).** The server downloads whatever link it's given, so someone could hand it an *internal* address: the host's private network, or `169.254.169.254`, where cloud servers keep their secrets. This is called SSRF (server-side request forgery). Before every download the server now checks that the link is `http`/`https`, on a normal web port (80 or 443), and that its name points **only** at public addresses. Three tricks needed extra care:
+- **The same address written differently:** `http://2852039166/` *is* `169.254.169.254`. The name is looked up, not just read, so the real address is what gets checked.
+- **Redirects:** curl used to follow them by itself, so a public page could bounce the server to an internal one. Redirects are now followed by my own code, and every hop is checked *before* anything is downloaded from it.
+- **DNS rebinding:** a name can point at a public address while it's checked and at a private one a moment later, when curl connects. The checked address is **pinned**: curl connects to exactly that address instead of looking the name up again.
+
+Adding such a link answers **400** (*"OnTrack won't open this link: … points to a private or internal address."*) and saves nothing.
+
+**2. Upload size limit.** The phone and the extension upload whole store pages (Amazon: ~1.7 MB). Anything over **5 MB** gets **413**. FastAPI reads an upload *before* checking the API key, so the limit sits in front of everything: an outsider without the key can't send a giant file either. It checks the size the sender announces (`Content-Length`) **and** counts the bytes that actually arrive, for uploads that don't announce a size (*chunked*). My first version raised an error when the count went over, and FastAPI caught it and answered a confusing **400 "error parsing the body"**. Testing against a real server found it; the limit now answers 413 itself and tells the app the sender has gone away.
+
+**3. Rate limiting.** At most **60 requests a minute** from one address, and **10** for the heavy ones that make the server download store pages (add from link, ↻ Refresh). Over the limit: **429** with `Retry-After`. It's a *sliding window* (the last 60 seconds, not "this minute on the clock"), so a burst can't straddle two minutes to get double. A leaked key or a Shortcut stuck in a loop can't burn the hosting credit or get the server blocked by stores. It's kept in memory, which is fine for one server process.
+
+**4. "This month" in India time.** Times are stored in UTC, which is 5½ hours behind India, so a purchase at 00:30 on 1 November counted toward **October**. Times are still *stored* in UTC (one unambiguous clock), but spent-this-month now follows `ONTRACK_TIMEZONE` (default `Asia/Kolkata`). A misspelt zone stops the server at startup instead of quietly making every month wrong. Windows doesn't include the time zone database Python needs, so `tzdata` is in `requirements.txt`.
+
+All four limits are settings (`ONTRACK_MAX_UPLOAD_MB`, `ONTRACK_RATE_LIMIT`, `ONTRACK_RATE_LIMIT_HEAVY`, `ONTRACK_TIMEZONE`), so they can change without touching code.
+
+**A slip worth remembering:** one update reached me as the *previous* version of two files; the tests said `68 passed` instead of the expected `70`, and `git status` said "nothing to commit". The expected test count and `git diff --stat` are how I check a change really landed.
+
 ### Known limits
 
-- **Month boundary:** times are stored in UTC, which is 5½ hours behind India. A purchase between midnight and 5:30 am on the 1st counts toward the previous month. To be fixed at deployment.
+- **One time zone, one currency:** "this month" follows one setting (`ONTRACK_TIMEZONE`) and every price is shown in ₹. Each person gets their own time zone and currency with Accounts.
+- **Rate limits live in memory:** they reset when the server restarts, and they'd need a shared store if OnTrack ever ran on several servers at once.
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
 - **The extension is loaded by hand** (Developer mode → Load unpacked), not from the Chrome Web Store, so it shows a small "unpacked" badge, and after editing its files it needs a reload in `chrome://extensions`.
@@ -464,6 +486,23 @@ uvicorn main:app --reload
 Open http://127.0.0.1:8000/docs to try every endpoint in the browser.
 
 On a laptop without Postgres, `pytest` says something like *49 passed, 37 skipped*: the skipped ones are the Postgres half, which GitHub Actions runs on every push.
+
+### Settings
+
+All optional except the API key; put them in `backend/.env` locally or in the host's settings when deployed.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ONTRACK_API_KEY` | (required) | The secret every request must send in `X-API-Key` |
+| `ONTRACK_CORS_ORIGINS` | `http://localhost:5173` | Web addresses allowed to call the API from a browser (comma-separated; never `*`) |
+| `DATABASE_URL` | unset (SQLite) | Postgres address; see below |
+| `ONTRACK_DB` | `ontrack.db` | SQLite file, when `DATABASE_URL` isn't set |
+| `ONTRACK_TIMEZONE` | `Asia/Kolkata` | Whose calendar "spent this month" follows |
+| `ONTRACK_MAX_UPLOAD_MB` | `5` | Largest upload accepted (413 above it) |
+| `ONTRACK_RATE_LIMIT` | `60` | Requests per minute from one address (429 above it) |
+| `ONTRACK_RATE_LIMIT_HEAVY` | `10` | Per minute for requests that download store pages |
+
+**Behind a proxy (Railway):** start uvicorn with `--proxy-headers --forwarded-allow-ips="*"`, or every request looks like it came from the proxy and everyone shares one rate limit.
 
 ### Using Postgres instead of SQLite
 
@@ -572,7 +611,7 @@ After editing any file in `extension/`, click ↻ on its card in `chrome://exten
 
 ## API overview
 
-All endpoints except `/health` require the `X-API-Key` header.
+All endpoints except `/health` require the `X-API-Key` header. Besides the usual codes, the server can answer **400** (a link to a private or internal address), **413** (upload over the size limit) and **429** (too many requests; `Retry-After` says how long to wait).
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -604,7 +643,7 @@ OnTrack/
 │   ├── db.py              schema; SQLite or Postgres (DATABASE_URL)
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
-│   ├── tests/             offline tests (fake pages, fake extractor): 85, half of them run on SQLite and Postgres
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 113, half of them run on SQLite and Postgres
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -661,7 +700,8 @@ OnTrack/
 - [ ] Installable PWA (home-screen icon, app name, offline shell)
 - [x] Postgres support: one setting (`DATABASE_URL`) picks SQLite or Postgres; tests run on both; a script copies my data across, keeping ids
 - [x] GitHub Actions: every push runs the tests on SQLite and Postgres, and builds and lints the frontend
-- [ ] Hardening before going public: block private/internal addresses (SSRF), upload size limit, rate limiting, month boundary in India time
+- [x] Hardening before going public: block private/internal addresses (SSRF), upload size limit, rate limiting, month boundary in India time
+- [ ] Security sweep before deploying: secrets, CORS, the extension's permissions, error messages, dependencies, deployed settings
 - [ ] Deploy: web app on Vercel, backend on Railway (free plan, $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
@@ -727,3 +767,8 @@ OnTrack/
 - Wrote `copy_to_postgres.py`; its test caught the id counter not moving after a copy, and then ids of deleted items being reused
 - Found that my work laptop's Smart App Control blocks psycopg and a local Postgres install; added `--sql-out` (paste the copy into Neon's SQL Editor) and GitHub Actions, which runs all 85 tests with a real Postgres on every push. First green run
 - Chose Railway's free plan for the backend after measuring the server: about 58 MB of RAM and 2 ms of CPU per `/summary`, roughly $0.60–0.70 of the $1 monthly credit even if always on, with the database on Neon
+
+**2026-10-11**
+- Merged `feature/postgres` (PR #8) after the first green GitHub Actions run
+- `feature/hardening`, one tested commit per step: SSRF block (public addresses only, every redirect checked, the checked address pinned against DNS rebinding); 5 MB upload limit in front of everything, found and fixed a chunked upload answering 400 instead of 413 by testing a real server; rate limiting (60/min, 10/min for page downloads, sliding window, 429 + `Retry-After`); "spent this month" follows `ONTRACK_TIMEZONE` (default `Asia/Kolkata`). 113 tests
+- Decided that currency and country become per-person settings with Accounts, which also unlocks a trial for someone in the US

@@ -35,6 +35,17 @@ CATALOGUE = {
 TEST_PG = os.getenv("TEST_DATABASE_URL")
 
 
+def fake_resolve(host, port, **kwargs):
+    """Look up website names without the network: anything ending in
+    .internal points at a private address, everything else at a public one."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address(host))     # an address typed directly stays itself
+    except ValueError:
+        ip = "10.0.0.5" if host.endswith(".internal") else "93.184.216.34"
+    return [(2, 1, 6, "", (ip, port))]
+
+
 def _wipe_postgres(url):
     """Start each Postgres test from empty tables, like a fresh SQLite file."""
     import psycopg
@@ -63,6 +74,8 @@ def client(request, tmp_path, monkeypatch):
         return next(p for p in catalogue.values() if p.url == url)
 
     main.app.dependency_overrides[main.get_extract] = lambda: fake_extract
+    main.app.dependency_overrides[main.get_resolver] = lambda: fake_resolve
+    main.rate_limiter.reset()                # each test starts with a fresh request count
     with TestClient(main.app) as c:          # `with` runs startup (creates tables)
         c.catalogue = catalogue              # tests can change "store prices"
         c.backend = request.param            # "sqlite" or "postgres"
@@ -554,3 +567,126 @@ def test_already_saved_reply_names_the_link(client):
     upd = client.post(f"/links/{r.json()['link_id']}/from-html",
                       files={"html": ("p.html", page, "text/html")}, headers=H).json()
     assert upd["ok"] and upd["old_price"] == 1999 and upd["new_price"] == 1899
+
+def test_links_to_private_addresses_are_refused(client):
+    """SSRF: the server must never be pointed at its own private network."""
+    for path, body in [("/items/from-link", {"url": "http://admin.internal/secrets"}),
+                       ("/items", {"name": "Router", "price": 1, "url": "http://admin.internal/"}),
+                       ("/items/from-link", {"url": "http://169.254.169.254/latest/meta-data/"}),
+                       ("/items/from-link", {"url": "https://shop.example:8443/p"})]:
+        r = client.post(path, json=body, headers=H)
+        assert r.status_code == 400, (path, body, r.text)
+        assert "won't open this link" in r.json()["detail"]
+    item = client.post("/items", json={"name": "Lamp", "price": 999}, headers=H).json()
+    r = client.post(f"/items/{item['id']}/links", json={"url": "http://admin.internal/"}, headers=H)
+    assert r.status_code == 400
+    assert len(client.get("/items", headers=H).json()) == 1         # nothing else was saved
+
+
+def test_uploads_over_the_size_limit_are_refused(client):
+    """A huge upload must be turned away before it fills the server's memory,
+    even without a valid API key. A normal Amazon-sized page (~1.7 MB) still works."""
+    big = b"<html>" + b"x" * (6 * 1024 * 1024) + b"</html>"           # 6 MB, over the 5 MB limit
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/1"},
+                    files={"html": ("page.html", big, "text/html")}, headers=H)
+    assert r.status_code == 413 and "too big" in r.json()["detail"]
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/1"},
+                    files={"html": ("page.html", big, "text/html")}, headers={"X-API-Key": "wrong"})
+    assert r.status_code == 413                                       # refused before the key is even checked
+    assert client.get("/items", headers=H).json() == []
+
+    normal = b"<html>" + b"x" * (1700 * 1024) + b"</html>"           # ~1.7 MB
+    r = client.post("/items/from-html", data={"url": "https://www.savana.com/details/1"},
+                    files={"html": ("page.html", normal, "text/html")}, headers=H)
+    assert r.status_code == 201
+
+
+def test_size_limit_counts_bytes_even_without_a_content_length():
+    """Some senders don't say how big the upload is (chunked uploads). The limit
+    counts the bytes that actually arrive, so leaving the header out doesn't help:
+    the sender gets 413, and the app is told the sender left instead of getting
+    the rest of the body."""
+    import asyncio
+    app_saw = []
+
+    async def app(scope, receive, send):
+        while True:
+            message = await receive()
+            app_saw.append(message["type"])
+            if not message.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 201, "headers": []})   # dropped
+
+    limited = main.LimitRequestSize(app, max_bytes=100)
+    chunks = [{"type": "http.request", "body": b"x" * 60, "more_body": True}] * 3
+    sent = []
+
+    async def receive():
+        return chunks.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(limited({"type": "http", "headers": []}, receive, send))
+    assert app_saw == ["http.request", "http.disconnect"]          # 60 bytes, then "the sender left"
+    starts = [m for m in sent if m["type"] == "http.response.start"]
+    assert [m["status"] for m in starts] == [413]                   # only our answer goes out
+
+
+def test_too_many_requests_get_429(client, monkeypatch):
+    """Over the limit, requests are refused with 429 and told how long to wait."""
+    monkeypatch.setattr(main, "RATE_LIMIT_HEAVY", 3)
+    for _ in range(3):
+        assert client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"},
+                           headers=H).status_code in (201, 409)
+    r = client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H)
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1
+    assert client.get("/summary", headers=H).status_code == 200      # light requests still work
+
+    monkeypatch.setattr(main, "RATE_LIMIT", 5)
+    codes = [client.get("/summary", headers=H).status_code for _ in range(6)]
+    assert codes.count(429) >= 1                                      # the general limit too
+    assert client.get("/health").status_code == 200                   # the health check is never limited
+
+
+def test_rate_limit_window_slides_and_counts_each_address_separately():
+    now = [0.0]
+    limiter = main.RateLimiter(clock=lambda: now[0])
+    assert all(limiter.allow("1.2.3.4", "heavy", 2) == 0 for _ in range(2))
+    assert limiter.allow("1.2.3.4", "heavy", 2) > 0                   # third in the same minute
+    assert limiter.allow("5.6.7.8", "heavy", 2) == 0                  # someone else isn't affected
+    now[0] = 59.0
+    assert limiter.allow("1.2.3.4", "heavy", 2) > 0                   # still inside the last 60 s
+    now[0] = 60.5
+    assert limiter.allow("1.2.3.4", "heavy", 2) == 0                  # the first two have expired
+
+def test_spent_this_month_follows_india_time_not_utc(client, monkeypatch):
+    """Stored times are UTC, which is 5.5 hours behind India. A purchase at 00:30
+    on 1 Nov in India is still 31 Oct in UTC: it belongs to November's budget."""
+    from datetime import datetime, timezone
+    def at(stamp):
+        monkeypatch.setattr(services, "_utcnow", lambda: datetime.fromisoformat(stamp))
+
+    client.put("/budget", json={"amount": 5000}, headers=H)
+    late = client.post("/items", json={"name": "Late-night kurta", "price": 700}, headers=H).json()
+    early = client.post("/items", json={"name": "Halloween mask", "price": 300}, headers=H).json()
+    at("2026-10-31T19:00:00+00:00")                       # 1 Nov, 00:30 in India
+    client.patch(f"/items/{late['id']}", json={"status": "purchased"}, headers=H)
+    at("2026-10-31T18:00:00+00:00")                       # 31 Oct, 23:30 in India
+    client.patch(f"/items/{early['id']}", json={"status": "purchased"}, headers=H)
+
+    at("2026-11-05T06:00:00+00:00")                       # looking at the app on 5 Nov
+    assert client.get("/summary", headers=H).json()["spent_this_month"] == 700
+
+    monkeypatch.setenv("ONTRACK_TIMEZONE", "UTC")         # the old behaviour, for contrast
+    assert client.get("/summary", headers=H).json()["spent_this_month"] == 0
+
+
+def test_a_misspelt_time_zone_stops_the_server_at_startup(tmp_path, monkeypatch):
+    monkeypatch.setenv("ONTRACK_API_KEY", KEY)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("ONTRACK_DB", str(tmp_path / "tz.db"))
+    monkeypatch.setenv("ONTRACK_TIMEZONE", "Asia/Kolkatta")
+    with pytest.raises(RuntimeError, match="isn't a time zone"):
+        with TestClient(main.app):
+            pass

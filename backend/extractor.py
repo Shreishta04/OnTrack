@@ -15,14 +15,16 @@ Usage:
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
+import socket
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
 from bs4 import BeautifulSoup
 
@@ -76,19 +78,102 @@ def deadline_fetcher(get: Callable[[str, float], Page], total: float = TOTAL_TIM
     return fetch
 
 
-def make_fetcher() -> Fetcher:
+# ------------------------------------------------- only public websites
+# The server downloads whatever link it's given. Without these checks, someone
+# could hand it an INTERNAL address (the host's private network, or
+# 169.254.169.254, where cloud servers keep their secrets) and the server would
+# fetch it for them. This is called SSRF (server-side request forgery).
+
+class UnsafeURL(ValueError):
+    """A link OnTrack must never open."""
+
+
+ALLOWED_PORTS = {80, 443}       # normal websites; internal services hide on other ports
+MAX_HTTP_REDIRECTS = 5
+Resolver = Callable[..., list]  # socket.getaddrinfo, or a fake one in tests
+
+
+def check_public_url(url: str, resolve: Resolver = socket.getaddrinfo) -> str:
+    """Raise UnsafeURL unless `url` is http(s), on a normal port, and its name
+    points ONLY at public addresses. Returns the address to connect to.
+
+    The name is looked up here, not just read: "localhost", "2852039166" or a
+    harmless-looking domain can all point at an internal address."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise UnsafeURL("only http and https links can be opened")
+    if not parts.hostname:
+        raise UnsafeURL("the link has no website name")
+    try:
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        raise UnsafeURL("the link has an invalid port") from None
+    if port not in ALLOWED_PORTS:
+        raise UnsafeURL(f"port {port} isn't a normal website port")
+
+    try:
+        infos = resolve(parts.hostname, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as exc:
+        raise ConnectionError(f"couldn't find the website {parts.hostname}") from exc
+    addresses = []
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])     # "%eth0" = IPv6 zone, not part of the address
+        if ip.version == 6 and ip.ipv4_mapped:                   # ::ffff:10.0.0.1 is really 10.0.0.1
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            raise UnsafeURL(f"{parts.hostname} points to a private or internal address")
+        addresses.append(str(ip))
+    if not addresses:
+        raise ConnectionError(f"couldn't find the website {parts.hostname}")
+    return addresses[0]
+
+
+def guarded_get(raw_get: Callable[[str, str, float], tuple[int, str | None, str]],
+                resolve: Resolver = socket.getaddrinfo) -> Callable[[str, float], Page]:
+    """Download a page, checking the address before EVERY hop.
+
+    We follow redirects ourselves instead of letting curl do it, because a
+    public page could otherwise redirect the server to an internal one.
+    `raw_get(url, ip, timeout)` downloads from exactly that checked ip and
+    returns (status, Location header, text)."""
+    def get(url: str, timeout: float) -> Page:
+        end = time.monotonic() + timeout
+        for _ in range(MAX_HTTP_REDIRECTS + 1):
+            ip = check_public_url(url, resolve)
+            left = end - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f"the store took too long (gave up after {timeout:g} s)")
+            status, location, text = raw_get(url, ip, left)
+            if status in (301, 302, 303, 307, 308) and location:
+                url = urljoin(url, location)                       # Location may be relative
+                continue
+            return Page(status=status, url=url, text=text)
+        raise ConnectionError("the store redirected too many times")
+
+    return get
+
+
+def make_fetcher(resolve: Resolver = socket.getaddrinfo) -> Fetcher:
     # curl_cffi reproduces Chrome's TLS handshake. Bot-protection services
     # fingerprint that handshake, so a fake User-Agent alone isn't enough.
+    from curl_cffi import CurlOpt
     from curl_cffi import requests as creq
 
     session = creq.Session(impersonate="chrome")
     session.headers.update({"Accept-Language": "en-IN,en;q=0.9"})
 
-    def get(url: str, timeout: float) -> Page:
-        r = session.get(url, timeout=timeout, allow_redirects=True)
-        return Page(status=r.status_code, url=str(r.url), text=r.text)
+    def raw_get(url: str, ip: str, timeout: float) -> tuple[int, str | None, str]:
+        parts = urlsplit(url)
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        # Pin the name to the address we checked. Otherwise curl looks the name
+        # up again, and a name that just pointed at a public address could now
+        # point at an internal one ("DNS rebinding").
+        pinned = f"[{ip}]" if ":" in ip else ip
+        session.curl_options[CurlOpt.RESOLVE] = [f"{parts.hostname}:{port}:{pinned}"]
+        r = session.get(url, timeout=timeout, allow_redirects=False)
+        return r.status_code, r.headers.get("location"), r.text
 
-    return deadline_fetcher(get)
+    return deadline_fetcher(guarded_get(raw_get, resolve))
 
 
 def html_fetcher(url: str, html: str) -> Fetcher:
@@ -393,6 +478,8 @@ def extract(url: str, fetch: Fetcher, debug_dir: Path | None = None) -> Product:
             if not target:
                 break
             page = fetch(clean_url(target))
+    except UnsafeURL as exc:
+        return Product(url=url, error=f"OnTrack won't open this link: {exc}.")
     except Exception as exc:
         return Product(url=url, error=f"Network error: {exc.__class__.__name__}: {exc}")
 

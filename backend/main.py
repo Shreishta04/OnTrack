@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -20,8 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
 
+import socket
+
 import db
 import services
+from extractor import UnsafeURL, check_public_url
 from services import Duplicate, NotFound
 from typing import Literal
 load_dotenv()   # reads settings from .env (kept out of git) into environment variables
@@ -31,6 +36,11 @@ load_dotenv()   # reads settings from .env (kept out of git) into environment va
 async def lifespan(app: FastAPI):
     if not os.getenv("ONTRACK_API_KEY"):
         raise RuntimeError("ONTRACK_API_KEY is not set. Copy .env.example to .env and set it.")
+    try:
+        services.local_zone()          # a typo here would quietly make every month wrong
+    except Exception:
+        raise RuntimeError(f"ONTRACK_TIMEZONE={os.getenv('ONTRACK_TIMEZONE')!r} isn't a time zone "
+                           "name. Use one like Asia/Kolkata or America/New_York.") from None
     conn = db.connect()
     db.init(conn)        # create tables on first run
     conn.close()
@@ -38,6 +48,134 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OnTrack API", version="0.1.0", lifespan=lifespan)
+
+
+# Upload size limit. The phone and the extension upload whole store pages
+# (an Amazon page is about 1.7 MB). Without a limit, one huge upload could fill
+# the server's memory or disk. The check runs BEFORE anything else reads the
+# request, even before the API key is checked, so an outsider can't send one
+# either. ONTRACK_MAX_UPLOAD_MB changes the limit.
+MAX_UPLOAD_MB = float(os.getenv("ONTRACK_MAX_UPLOAD_MB", "5"))
+
+
+class LimitRequestSize:
+    """Refuse requests bigger than max_bytes with 413 "Payload Too Large".
+
+    Two checks: the Content-Length header (the size the sender announces),
+    and a running count of the bytes that actually arrive, for senders that
+    don't announce a size or announce the wrong one. When the count goes over,
+    we answer 413 ourselves and tell the app the sender has gone away, so it
+    stops reading (raising an error instead would be caught by FastAPI and
+    turned into a confusing 400)."""
+
+    def __init__(self, app, max_bytes: int):
+        self.app, self.max_bytes = app, max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        announced = dict(scope["headers"]).get(b"content-length", b"")
+        if announced.isdigit() and int(announced) > self.max_bytes:
+            return await self.too_large(send)
+
+        received, answered = 0, False
+
+        async def counting_receive():
+            nonlocal received, answered
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    if not answered:
+                        answered = True
+                        await self.too_large(send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message):
+            if not answered:                 # once we've said 413, the app's own answer is dropped
+                await send(message)
+
+        await self.app(scope, counting_receive, guarded_send)
+
+    async def too_large(self, send):
+        response = JSONResponse(status_code=413, content={
+            "detail": f"That's too big to upload (the limit is {MAX_UPLOAD_MB:g} MB)."})
+        await response({"type": "http"}, None, send)
+
+
+# The form wrapped around a page adds a few hundred bytes; 64 KB is plenty.
+app.add_middleware(LimitRequestSize, max_bytes=int(MAX_UPLOAD_MB * 1024 * 1024) + 64 * 1024)
+
+
+# Rate limiting: at most N requests a minute from one address. A leaked key, a
+# Shortcut stuck in a loop or someone hammering the server can't burn through
+# the hosting credit or get my server blocked by the stores. "Heavy" requests
+# make the server download store pages, so they get a much lower limit.
+RATE_LIMIT = int(os.getenv("ONTRACK_RATE_LIMIT", "60"))              # per minute, any request
+RATE_LIMIT_HEAVY = int(os.getenv("ONTRACK_RATE_LIMIT_HEAVY", "10"))  # per minute, page downloads
+HEAVY_REQUESTS = re.compile(r"^POST (/items/from-link|/items/from-html|/items/\d+/links"
+                            r"|/refresh|/items/\d+/refresh)$")
+
+
+class RateLimiter:
+    """Remembers when each address made its recent requests ("sliding window":
+    always the last 60 seconds, not "this calendar minute", so a burst can't
+    straddle two minutes to get double).
+
+    Kept in memory: fine for one server process. If OnTrack ever runs on several
+    servers at once, this would need a shared store such as Redis."""
+
+    def __init__(self, clock=time.monotonic, window: float = 60.0):
+        self.clock, self.window = clock, window
+        self.hits: dict[tuple[str, str], deque] = defaultdict(deque)
+
+    def allow(self, key: str, bucket: str, limit: int) -> float:
+        """0 if the request may go ahead, else seconds until it would be allowed."""
+        now = self.clock()
+        hits = self.hits[(key, bucket)]
+        while hits and hits[0] <= now - self.window:      # forget requests older than the window
+            hits.popleft()
+        if len(hits) >= limit:
+            return hits[0] + self.window - now
+        hits.append(now)
+        if len(self.hits) > 10_000:                       # don't let many addresses fill the memory
+            self.hits = defaultdict(deque, {k: v for k, v in self.hits.items() if v})
+        return 0.0
+
+    def reset(self) -> None:
+        self.hits.clear()
+
+
+rate_limiter = RateLimiter()
+
+
+class LimitRequestRate:
+    """Answers 429 "Too Many Requests" (with Retry-After: seconds to wait) once
+    an address goes over the limit. Runs before the upload is read and before
+    the API key is checked, so refused requests cost almost nothing."""
+
+    def __init__(self, app, limiter: RateLimiter):
+        self.app, self.limiter = app, limiter
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] == "/health" or scope["method"] == "OPTIONS":
+            return await self.app(scope, receive, send)
+        # On Railway, the real address comes from the proxy in front of the server:
+        # uvicorn must be started with --proxy-headers (see README, Deploy).
+        who = (scope.get("client") or ("unknown", 0))[0]
+        wait = self.limiter.allow(who, "all", RATE_LIMIT)
+        if not wait and HEAVY_REQUESTS.match(f"{scope['method']} {scope['path']}"):
+            wait = self.limiter.allow(who, "heavy", RATE_LIMIT_HEAVY)
+        if wait:
+            response = JSONResponse(
+                status_code=429, headers={"Retry-After": str(int(wait) + 1)},
+                content={"detail": f"Too many requests. Try again in {int(wait) + 1} s."})
+            return await response(scope, receive, send)
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(LimitRequestRate, limiter=rate_limiter)
 
 # CORS: browsers block a web page from calling an API on a different origin
 # (different host or port) unless the API explicitly allows it. The React app
@@ -81,6 +219,23 @@ def get_db():
 def get_extract():
     """Which extractor to use. Tests override this with a fake."""
     return services.default_extract
+
+
+def get_resolver():
+    """How website names are looked up. Tests override this, so they never use the network."""
+    return socket.getaddrinfo
+
+
+def refuse_unsafe(url: str, resolve) -> None:
+    """Answer 400 for a link to a private or internal address, instead of saving
+    an item that can never be fetched. (The download itself checks again,
+    including every redirect: this is only the friendly early answer.)"""
+    try:
+        check_public_url(url, resolve)
+    except UnsafeURL as exc:
+        raise HTTPException(status_code=400, detail=f"OnTrack won't open this link: {exc}.")
+    except OSError:
+        pass        # can't look the name up right now: the download will say so
 
 
 def require_key(x_api_key: str = Header(..., description="Your ONTRACK_API_KEY")):
@@ -180,8 +335,10 @@ def get_item_history(item_id: int, conn=Depends(get_db)):
 
 
 @app.post("/items/from-link", status_code=201, dependencies=auth)
-def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
+def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract),
+                   resolve=Depends(get_resolver)):
     """Paste a product link. The item is created even if the price can't be read."""
+    refuse_unsafe(str(body.url), resolve)
     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
     return services.item_view(conn, item_id)
 
@@ -208,8 +365,10 @@ def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
 
 
 @app.post("/items", status_code=201, dependencies=auth)
-def post_manual(body: ManualItemIn, conn=Depends(get_db)):
+def post_manual(body: ManualItemIn, conn=Depends(get_db), resolve=Depends(get_resolver)):
     """An item you type in yourself: a name, a price, and optionally a store link."""
+    if body.url:
+        refuse_unsafe(str(body.url), resolve)
     item_id = services.create_manual_item(conn, body.name, body.price, body.note, body.priority,
                                           str(body.url) if body.url else None)
     return services.item_view(conn, item_id)
@@ -234,8 +393,10 @@ def remove_item(item_id: int, conn=Depends(get_db)):
 
 
 @app.post("/items/{item_id}/links", status_code=201, dependencies=auth)
-def post_link(item_id: int, body: LinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
+def post_link(item_id: int, body: LinkIn, conn=Depends(get_db), extract=Depends(get_extract),
+              resolve=Depends(get_resolver)):
     """Add another store's link to an item; the cheapest one counts."""
+    refuse_unsafe(str(body.url), resolve)
     services.add_link(conn, item_id, str(body.url), extract)
     return services.item_view(conn, item_id)
 
