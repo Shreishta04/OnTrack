@@ -20,8 +20,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
 
+import socket
+
 import db
 import services
+from extractor import UnsafeURL, check_public_url
 from services import Duplicate, NotFound
 from typing import Literal
 load_dotenv()   # reads settings from .env (kept out of git) into environment variables
@@ -81,6 +84,23 @@ def get_db():
 def get_extract():
     """Which extractor to use. Tests override this with a fake."""
     return services.default_extract
+
+
+def get_resolver():
+    """How website names are looked up. Tests override this, so they never use the network."""
+    return socket.getaddrinfo
+
+
+def refuse_unsafe(url: str, resolve) -> None:
+    """Answer 400 for a link to a private or internal address, instead of saving
+    an item that can never be fetched. (The download itself checks again,
+    including every redirect: this is only the friendly early answer.)"""
+    try:
+        check_public_url(url, resolve)
+    except UnsafeURL as exc:
+        raise HTTPException(status_code=400, detail=f"OnTrack won't open this link: {exc}.")
+    except OSError:
+        pass        # can't look the name up right now: the download will say so
 
 
 def require_key(x_api_key: str = Header(..., description="Your ONTRACK_API_KEY")):
@@ -180,8 +200,10 @@ def get_item_history(item_id: int, conn=Depends(get_db)):
 
 
 @app.post("/items/from-link", status_code=201, dependencies=auth)
-def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
+def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract),
+                   resolve=Depends(get_resolver)):
     """Paste a product link. The item is created even if the price can't be read."""
+    refuse_unsafe(str(body.url), resolve)
     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
     return services.item_view(conn, item_id)
 
@@ -208,8 +230,10 @@ def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
 
 
 @app.post("/items", status_code=201, dependencies=auth)
-def post_manual(body: ManualItemIn, conn=Depends(get_db)):
+def post_manual(body: ManualItemIn, conn=Depends(get_db), resolve=Depends(get_resolver)):
     """An item you type in yourself: a name, a price, and optionally a store link."""
+    if body.url:
+        refuse_unsafe(str(body.url), resolve)
     item_id = services.create_manual_item(conn, body.name, body.price, body.note, body.priority,
                                           str(body.url) if body.url else None)
     return services.item_view(conn, item_id)
@@ -234,8 +258,10 @@ def remove_item(item_id: int, conn=Depends(get_db)):
 
 
 @app.post("/items/{item_id}/links", status_code=201, dependencies=auth)
-def post_link(item_id: int, body: LinkIn, conn=Depends(get_db), extract=Depends(get_extract)):
+def post_link(item_id: int, body: LinkIn, conn=Depends(get_db), extract=Depends(get_extract),
+              resolve=Depends(get_resolver)):
     """Add another store's link to an item; the cheapest one counts."""
+    refuse_unsafe(str(body.url), resolve)
     services.add_link(conn, item_id, str(body.url), extract)
     return services.item_view(conn, item_id)
 

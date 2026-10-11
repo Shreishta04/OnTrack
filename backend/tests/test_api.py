@@ -35,6 +35,17 @@ CATALOGUE = {
 TEST_PG = os.getenv("TEST_DATABASE_URL")
 
 
+def fake_resolve(host, port, **kwargs):
+    """Look up website names without the network: anything ending in
+    .internal points at a private address, everything else at a public one."""
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address(host))     # an address typed directly stays itself
+    except ValueError:
+        ip = "10.0.0.5" if host.endswith(".internal") else "93.184.216.34"
+    return [(2, 1, 6, "", (ip, port))]
+
+
 def _wipe_postgres(url):
     """Start each Postgres test from empty tables, like a fresh SQLite file."""
     import psycopg
@@ -63,6 +74,7 @@ def client(request, tmp_path, monkeypatch):
         return next(p for p in catalogue.values() if p.url == url)
 
     main.app.dependency_overrides[main.get_extract] = lambda: fake_extract
+    main.app.dependency_overrides[main.get_resolver] = lambda: fake_resolve
     with TestClient(main.app) as c:          # `with` runs startup (creates tables)
         c.catalogue = catalogue              # tests can change "store prices"
         c.backend = request.param            # "sqlite" or "postgres"
@@ -554,3 +566,17 @@ def test_already_saved_reply_names_the_link(client):
     upd = client.post(f"/links/{r.json()['link_id']}/from-html",
                       files={"html": ("p.html", page, "text/html")}, headers=H).json()
     assert upd["ok"] and upd["old_price"] == 1999 and upd["new_price"] == 1899
+
+def test_links_to_private_addresses_are_refused(client):
+    """SSRF: the server must never be pointed at its own private network."""
+    for path, body in [("/items/from-link", {"url": "http://admin.internal/secrets"}),
+                       ("/items", {"name": "Router", "price": 1, "url": "http://admin.internal/"}),
+                       ("/items/from-link", {"url": "http://169.254.169.254/latest/meta-data/"}),
+                       ("/items/from-link", {"url": "https://shop.example:8443/p"})]:
+        r = client.post(path, json=body, headers=H)
+        assert r.status_code == 400, (path, body, r.text)
+        assert "won't open this link" in r.json()["detail"]
+    item = client.post("/items", json={"name": "Lamp", "price": 999}, headers=H).json()
+    r = client.post(f"/items/{item['id']}/links", json={"url": "http://admin.internal/"}, headers=H)
+    assert r.status_code == 400
+    assert len(client.get("/items", headers=H).json()) == 1         # nothing else was saved
