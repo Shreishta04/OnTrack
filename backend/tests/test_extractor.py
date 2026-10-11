@@ -179,3 +179,16 @@ def test_slow_store_gives_up_after_total_time_limit():
     assert not p.ok and "took too long" in p.error
 
 
+
+
+
+def test_canonical_tag_reading_is_fast_on_hostile_pages():
+    """ReDoS: the old canonical pattern took 22 s on a 21 KB page built to trip it."""
+    import time
+    from extractor import html_fetcher
+    hostile = '<link rel="canonical" ' * 250_000                       # ~5 MB, no closing ">"
+    start = time.perf_counter()
+    page = html_fetcher("https://shop.example/p", hostile)("https://shop.example/p")
+    assert time.perf_counter() - start < 2 and page.url == "https://shop.example/p"
+    normal = '<link rel="canonical" href="https://www.amazon.in/dp/B0TEST123">'
+    assert html_fetcher("https://amzn.in/d/x", normal)("https://amzn.in/d/x").url == "https://www.amazon.in/dp/B0TEST123"

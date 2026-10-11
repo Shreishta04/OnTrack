@@ -425,6 +425,18 @@ All four limits are settings (`ONTRACK_MAX_UPLOAD_MB`, `ONTRACK_RATE_LIMIT`, `ON
 
 **A slip worth remembering:** one update reached me as the *previous* version of two files; the tests said `68 passed` instead of the expected `70`, and `git status` said "nothing to commit". The expected test count and `git diff --stat` are how I check a change really landed.
 
+### 28. A security sweep before deploying
+
+Before putting OnTrack on the internet I read the whole project the way an attacker would, and tested each suspicion instead of guessing. Already fine: no secret ever in git history, no known vulnerable packages (`pip-audit`, `npm audit`), SQL always uses placeholders, the key is compared in constant time, the extension only reads the current tab on click and shows server data with `textContent`. Found and fixed:
+
+1. **A page could freeze the server (ReDoS).** The pattern that reads a page's canonical tag (`<link[^>]+rel=…[^>]+href=…`) took **22 seconds on a 21 KB page** built to trip it, and practically forever on 5 MB: a regular expression that tries an exploding number of ways to match. Limiting each part's length wasn't enough (still a minute), because it restarted at every one of 250,000 tags. **Fix:** no clever pattern; scan tag by tag, cut each tag out (at most 2,000 characters) and read only that piece, never re-reading a character. Hostile 5 MB pages now take 0.15 s. The old code froze on the new test, which is the proof.
+2. **The rate limit could be dodged (and I had suggested the setting).** The planned Railway command trusted `X-Forwarded-For` completely (`--forwarded-allow-ips="*"`), and uvicorn then believes the *first* address in it, which the sender writes. An experiment showed a client could pose as a new address on every request. **Fix:** only the **last** entry counts, the one Railway's proxy writes (`ONTRACK_TRUST_PROXY=on`), plus a cap for everyone together (30 page downloads a minute), so even a trick I haven't thought of can't burn the credit.
+3. **A page could plant a `javascript:` link.** The server trusted a page's canonical tag as the item's address; a hostile page could make it `javascript:…`, which would run code in the app (where the API key is kept) if clicked. React 19 happened to block it, but only React. **Fix:** only `http(s)` links and images are saved.
+4. **A weak key was accepted**, including the example `change-me`. **Fix:** the server refuses to start with a key under 24 characters.
+5. **Smaller ones:** `/docs` can be hidden (`ONTRACK_DOCS=off`); names and notes have length limits (the free database is 1 GB); the phone's refresh uploads (each 5 MB page takes seconds of CPU) got their own limit.
+
+**Deploy files:** `frontend/vercel.json` adds browser security headers. The main one is a *Content Security Policy*: the deployed page may only run its own scripts and only talk to `https` addresses, so even if something slipped past React, injected code couldn't load scripts from elsewhere or talk to plain-`http` servers. Tested in a headless browser: the app renders, and a plain-`http` server is refused. `backend/railway.json` holds the start command and health check, so Railway's settings live in git.
+
 ### Known limits
 
 - **One time zone, one currency:** "this month" follows one setting (`ONTRACK_TIMEZONE`) and every price is shown in ₹. Each person gets their own time zone and currency with Accounts.
@@ -501,8 +513,12 @@ All optional except the API key; put them in `backend/.env` locally or in the ho
 | `ONTRACK_MAX_UPLOAD_MB` | `5` | Largest upload accepted (413 above it) |
 | `ONTRACK_RATE_LIMIT` | `60` | Requests per minute from one address (429 above it) |
 | `ONTRACK_RATE_LIMIT_HEAVY` | `10` | Per minute for requests that download store pages |
+| `ONTRACK_RATE_LIMIT_HEAVY_TOTAL` | `30` | Page downloads per minute from **all** addresses together |
+| `ONTRACK_RATE_LIMIT_UPLOADS` | `30` | Refresh uploads (`/links/{id}/from-html`) per minute |
+| `ONTRACK_TRUST_PROXY` | `off` | `on` behind Railway's proxy: the real address is the **last** `X-Forwarded-For` entry |
+| `ONTRACK_DOCS` | `on` | `off` on the deployed server hides `/docs` |
 
-**Behind a proxy (Railway):** start uvicorn with `--proxy-headers --forwarded-allow-ips="*"`, or every request looks like it came from the proxy and everyone shares one rate limit.
+The key must be at least 24 characters (`python -c "import secrets; print(secrets.token_urlsafe(32))"`); the server won't start otherwise. Don't start uvicorn with `--forwarded-allow-ips="*"`: it lets clients fake their address (Challenge 28).
 
 ### Using Postgres instead of SQLite
 
@@ -643,12 +659,14 @@ OnTrack/
 │   ├── db.py              schema; SQLite or Postgres (DATABASE_URL)
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 113, half of them run on SQLite and Postgres
+│   ├── railway.json       Railway: start command and health check
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 123, half of them run on SQLite and Postgres
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
     ├── index.html             the single HTML page (fonts, theme colour)
     ├── .env.local             dev server address + key (git-ignored)
+    ├── vercel.json            security headers for the deployed web app
     └── src/
         ├── main.tsx           entry point: draws <App /> into the page
         ├── App.tsx            loads /summary, owns the tab, handles button presses
@@ -701,7 +719,7 @@ OnTrack/
 - [x] Postgres support: one setting (`DATABASE_URL`) picks SQLite or Postgres; tests run on both; a script copies my data across, keeping ids
 - [x] GitHub Actions: every push runs the tests on SQLite and Postgres, and builds and lints the frontend
 - [x] Hardening before going public: block private/internal addresses (SSRF), upload size limit, rate limiting, month boundary in India time
-- [ ] Security sweep before deploying: secrets, CORS, the extension's permissions, error messages, dependencies, deployed settings
+- [x] Security sweep before deploying: fixed a ReDoS, an unspoofable rate limit, http(s)-only links, strong key, docs switch, length limits; browser security headers for Vercel
 - [ ] Deploy: web app on Vercel, backend on Railway (free plan, $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
@@ -772,3 +790,4 @@ OnTrack/
 - Merged `feature/postgres` (PR #8) after the first green GitHub Actions run
 - `feature/hardening`, one tested commit per step: SSRF block (public addresses only, every redirect checked, the checked address pinned against DNS rebinding); 5 MB upload limit in front of everything, found and fixed a chunked upload answering 400 instead of 413 by testing a real server; rate limiting (60/min, 10/min for page downloads, sliding window, 429 + `Retry-After`); "spent this month" follows `ONTRACK_TIMEZONE` (default `Asia/Kolkata`). 113 tests
 - Decided that currency and country become per-person settings with Accounts, which also unlocks a trial for someone in the US
+- Security sweep: found a ReDoS in the canonical-tag pattern (22 s on 21 KB; now 0.15 s on 5 MB), a way to dodge the rate limit through `X-Forwarded-For` (from a setting I'd planned to use), and pages planting `javascript:` links. Fixed those, plus a minimum key length, a switch for `/docs`, length limits and a refresh-upload limit. Added Vercel security headers and Railway's start settings to git. 123 tests

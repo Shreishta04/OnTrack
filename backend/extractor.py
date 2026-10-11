@@ -35,7 +35,29 @@ TRACKING_PARAMS = re.compile(
     r"social_share|psc|smid|th|lang)$"
 )
 AMAZON_ASIN = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})")
-CANONICAL_LINK = re.compile(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
+# The page's own "real address" (<link rel="canonical" href="...">). Found by
+# scanning tag by tag, not with one big pattern: the old pattern took 22 s on a
+# 21 KB page built to trip it, and practically forever on 5 MB ("ReDoS": a
+# pattern that tries an exploding number of ways to match). Each tag is cut out
+# first (at most 2,000 characters), so the small patterns below only ever see a
+# short piece of text.
+_REL_CANONICAL = re.compile(r'\brel\s*=\s*["\']?canonical\b', re.I)
+_HREF = re.compile(r'\bhref\s*=\s*["\']([^"\'<>]{1,2000})["\']', re.I)
+
+
+def find_canonical(html: str) -> str | None:
+    lower, start = html.lower(), 0
+    while (start := lower.find("<link", start)) != -1:
+        end = lower.find(">", start, start + 2000)
+        end = end if end != -1 else start + 2000      # no ">" nearby: a broken tag, take 2,000 characters
+        tag = html[start:end]
+        if _REL_CANONICAL.search(tag) and (m := _HREF.search(tag)):
+            return m.group(1)
+        start = end                                    # every character is read once, never again
+    return None
+
+
+MAX_TITLE = 300
 SAVANA_ID = re.compile(r"/details/(?:[^/?]*-)?(\d+)")
 FLIPKART_ITEM = re.compile(r"(/[^/]+/p/itm[0-9a-z]+)", re.I)   # /<name>/p/itm1bf2900f7d215
 
@@ -182,8 +204,9 @@ def html_fetcher(url: str, html: str) -> Fetcher:
     The first request gets that page. Any further request (Shopify's .js
     lookup, a redirect hop) gets a 404, because we must not go online for it.
     """
-    m = CANONICAL_LINK.search(html)
-    page = Page(200, m.group(1) if m else url, html)
+    canonical = find_canonical(html)
+    # The page decides its own "real address", so only believe a web address.
+    page = Page(200, canonical if is_web_url(canonical) else url, html)
     calls = []
 
     def fetch(u: str) -> Page:
@@ -470,7 +493,26 @@ def find_js_redirect(html: str) -> str | None:
 
 # ----------------------------------------------------------------- main
 
+def is_web_url(value: str | None) -> bool:
+    """Only http(s) addresses may be saved as links or images. A page could
+    otherwise plant "javascript:…", which runs code in the app if clicked."""
+    return bool(value) and urlsplit(value.strip()).scheme in ("http", "https")
+
+
 def extract(url: str, fetch: Fetcher, debug_dir: Path | None = None) -> Product:
+    """Read a product page. Whatever the page claims, the result only ever
+    holds a web address for the link and the image, and a sensible-length title."""
+    p = _extract(url, fetch, debug_dir)
+    if not is_web_url(p.url):
+        p.url = url
+    if not is_web_url(p.image):
+        p.image = None
+    if p.title:
+        p.title = p.title.strip()[:MAX_TITLE] or None
+    return p
+
+
+def _extract(url: str, fetch: Fetcher, debug_dir: Path | None = None) -> Product:
     try:
         page = fetch(clean_url(url))   # follows amzn.in short links to the real page
         for _ in range(MAX_REDIRECT_HOPS):
