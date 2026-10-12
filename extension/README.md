@@ -11,13 +11,13 @@ Plain JavaScript, no build step: edit a file, then reload the extension.
 3. Pin it: the puzzle-piece icon in the toolbar → 📌 next to OnTrack.
 4. Click the OnTrack icon. The first time it asks for:
 
-| Setting | Value |
-|---|---|
-| Server | `http://localhost:8000` (where uvicorn runs) |
-| API key | the value of `ONTRACK_API_KEY` in `backend/.env` |
-| App address | `http://localhost:5173` (opened by "Open OnTrack ↗") |
+| Setting | Deployed | Local development |
+|---|---|---|
+| Server | `https://ontrack-production-8f1d.up.railway.app` | `http://localhost:8000` (where uvicorn runs) |
+| API key | the production key (set in Railway) | `ONTRACK_API_KEY` from `backend/.env` |
+| App address | `https://on-track-eta.vercel.app` | `http://localhost:5173` (opened by "Open OnTrack ↗") |
 
-The sliders button in the popup changes them later. A server other than `localhost` / `127.0.0.1` asks for permission once, when you save it.
+The sliders button in the popup changes them later. A server other than `localhost` / `127.0.0.1` asks for permission once, when you save it; it then appears under the extension's **Site access** in `chrome://extensions`. When switching, clear each field completely (Ctrl+A, Delete) before pasting: the popup saves whatever is in the box, and a leftover `73` from `:5173` once made the app address `…vercel.app73`.
 
 ## Use
 
