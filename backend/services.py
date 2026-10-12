@@ -13,17 +13,25 @@ that never touches the internet.
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
+import re
+import time
 import sqlite3
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Callable
 from urllib.parse import urlsplit
 
-from extractor import Product, clean_url, extract, html_fetcher, make_fetcher
+from extractor import (NO_PRICE_FROM_BROWSER, NO_PRICE_JAVASCRIPT, Product, clean_url,
+                       extract, html_fetcher, make_fetcher)
 
 ExtractFn = Callable[[str], Product]
+
+# Uvicorn already prints this logger (on the laptop and in Railway's logs).
+log = logging.getLogger("uvicorn.error")
 
 REFRESH_COOLDOWN = timedelta(hours=1)   # skip links checked more recently than this
 REFRESH_CONCURRENCY = 3                 # at most 3 store pages being fetched at once
@@ -70,10 +78,82 @@ def local_month(stamp: str | None, zone: ZoneInfo) -> str | None:
     return moment.astimezone(zone).strftime("%Y-%m")
 
 
-def default_extract(url: str) -> Product:
+# ------------------------------------------------------------- store logs
+#
+# One log line per store page: which store, who downloaded the page, what it
+# gave, why not, and how long it took. On purpose NOT in it: the full link
+# (with Accounts it would show what people shop for; the link id finds it in
+# the database), the page itself, request headers, and so never the API key.
+#
+#   store  link=21  host=in.savana.com  via=server  result=blocked  reason="Store returned HTTP 471 (blocked or not found)"  took=1.2s
+
+REASON_MAX = 160
+
+
+def _result(p: Product) -> str:
+    """One word for what a try gave, easy to search for in the logs."""
+    if p.ok:
+        return "ok"
+    error = p.error or ""
+    if error.startswith("Store returned HTTP"):
+        return "blocked"
+    if error.startswith("Network error"):
+        return "network"
+    if error.startswith("OnTrack won't open"):
+        return "refused"
+    return "no-price"
+
+
+def _reason(error: str | None) -> str | None:
+    """The error, made safe for a log line: no web addresses (curl's messages
+    can contain the full link), one line, not too long, no stray quotes."""
+    if not error:
+        return None
+    text = re.sub(r"https?://\S+", "<link>", error)
+    text = " ".join(text.split()).replace('"', "'")
+    return text[:REASON_MAX]
+
+
+def _timed(via: str, fn: ExtractFn) -> ExtractFn:
+    """Wrap an extractor so its result remembers who downloaded the page
+    ("server", or "upload" for the phone and the extension) and how long it
+    took. Wrapping twice does nothing, so callers can wrap without checking."""
+    if getattr(fn, "timed", False):
+        return fn
+
+    def run(url: str) -> Product:
+        start = time.monotonic()
+        p = fn(url)
+        attempt = {"via": via, "host": urlsplit(p.url or url).netloc or "?", "result": _result(p),
+                   "price": p.price, "reason": _reason(p.error), "took": time.monotonic() - start}
+        return replace(p, attempts=[*p.attempts, attempt])   # a copy: never edit a shared result
+    run.timed = True
+    return run
+
+
+def _log_checks(link_id: int, p: Product) -> None:
+    """Write one line per try that led to this link's result."""
+    for a in p.attempts or [{"via": "?", "host": urlsplit(p.url or "").netloc or "?",
+                             "result": _result(p), "price": p.price, "reason": _reason(p.error),
+                             "took": None}]:
+        parts = [f"link={link_id}", f"host={a['host']}", f"via={a['via']}", f"result={a['result']}"]
+        if a["price"] is not None:
+            parts.append(f"price={a['price']:g}")
+        if a["reason"] and a["result"] != "ok":
+            parts.append(f'reason="{a["reason"]}"')
+        if a["took"] is not None:
+            parts.append(f"took={a['took']:.1f}s")
+        log.info("store    %s", "  ".join(parts))
+
+
+def _server_extract(url: str) -> Product:
     # A fresh session per call: curl_cffi sessions aren't safe to share
     # across the threads that refresh() runs extractions on.
     return extract(url, make_fetcher())
+
+
+# The server downloads the page itself.
+default_extract = _timed("server", _server_extract)
 
 # Stores whose pages must be downloaded on the phone, because they block
 # requests from servers (bot-checks). The server never fetches these: not when
@@ -90,12 +170,30 @@ def needs_phone(url: str | None) -> bool:
 def extract_from_html(html: str, fallback: ExtractFn | None = None) -> ExtractFn:
     """Read a page the phone already fetched. If that gives no price and the
     store isn't Amazon, let the server fetch the page itself instead."""
+    from_page = _timed("upload", lambda u: extract(u, html_fetcher(u, html)))
+    from_server = _timed("server", fallback) if fallback else None
+
     def run(url: str) -> Product:
-        p = extract(url, html_fetcher(url, html))
-        if p.ok or fallback is None or needs_phone(url) or needs_phone(p.url):
-            return p
-        return fallback(url)
+        p = from_page(url)
+        if not (p.ok or from_server is None or needs_phone(url) or needs_phone(p.url)):
+            tried = p.attempts
+            p = from_server(url)
+            p = replace(p, attempts=[*tried, *p.attempts])    # log both tries
+        return _browser_page_wording(p)
+    run.timed = True
     return run
+
+
+def _browser_page_wording(p: Product) -> Product:
+    """Wording for a page the phone or the extension sent. The extension sends the
+    finished page, after its JavaScript ran, so "probably loads its price with
+    JavaScript" is simply wrong there (the Tira case); the phone's download may
+    or may not have it. Both are covered by the plain truth: not a single
+    product page, or a store OnTrack can't read yet. This also applies when the
+    server's own try came after it and found the same: a name but no price."""
+    if not p.ok and p.error == NO_PRICE_JAVASCRIPT:
+        return replace(p, error=NO_PRICE_FROM_BROWSER)     # a copy: never edit a shared result
+    return p
 
 # ------------------------------------------------------------------ budget
 
@@ -120,6 +218,7 @@ def _log_status(conn, item_id, from_status, to_status):
 
 def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
     """Store the result of one extraction attempt on a link."""
+    _log_checks(link_id, p)
     if p.ok:
         conn.execute(
             """UPDATE links SET title = COALESCE(?, title), price = ?, mrp = ?,
@@ -175,7 +274,7 @@ def _fetch_link(conn: sqlite3.Connection, url: str,
     cleaned = clean_url(url)
     stuck = _known_link(conn, cleaned)
 
-    p = extract_fn(url)                        # the slow part: no write lock held here
+    p = _timed("server", extract_fn)(url)      # the slow part: no write lock held here
     final_url = clean_url(p.url or cleaned)   # e.g. amzn.in short link -> amazon.in/dp/...
     return final_url, p, stuck or _known_link(conn, final_url)
 
@@ -406,10 +505,19 @@ def _is_due(last_checked: str | None, force: bool) -> bool:
         return True
     return datetime.fromisoformat(last_checked) < datetime.now(timezone.utc) - REFRESH_COOLDOWN
 
+
+def _needs_check(link, force: bool) -> bool:
+    """Due for a check, or still without a price. A link with no price skips the
+    cooldown: the last attempt failed (a bot-check, a slow store), and waiting an
+    hour before trying again helps nobody. Used by the server's refresh and the
+    phone's list alike, so both follow the same rule."""
+    return link["price"] is None or _is_due(link["last_checked"], force)
+
 async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
                   item_id: int | None = None, delay: tuple[float, float] | None = None) -> dict:
-    """Re-check prices. Skips links checked within REFRESH_COOLDOWN unless force=True,
-    and links from phone-only stores (Amazon), which the phone refreshes instead.
+    """Re-check prices. Skips links checked within REFRESH_COOLDOWN unless force=True
+    (links still without a price are always retried), and links from phone-only
+    stores (Amazon), which the phone refreshes instead.
 
     Fetching runs on worker threads (the extractor is ordinary blocking code),
     at most REFRESH_CONCURRENCY at a time, with a small random pause before
@@ -427,7 +535,7 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
     phone_only = [l for l in links if needs_phone(l["url"])]
     links = [l for l in links if not needs_phone(l["url"])]
 
-    due = [l for l in links if _is_due(l["last_checked"], force)]
+    due = [l for l in links if _needs_check(l, force)]
 
     gate = asyncio.Semaphore(REFRESH_CONCURRENCY)
 
@@ -435,7 +543,7 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
         async with gate:
             if delay[1] > 0:
                 await asyncio.sleep(random.uniform(*delay))
-            return link, await asyncio.to_thread(extract_fn, link["url"])
+            return link, await asyncio.to_thread(_timed("server", extract_fn), link["url"])
 
     results = await asyncio.gather(*(check(l) for l in due))
 
@@ -459,7 +567,7 @@ def phone_refresh_list(conn, force: bool = False) -> list[dict]:
         "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' ORDER BY links.id"
     ).fetchall()
     return [{"link_id": r["id"], "url": r["url"]} for r in rows
-            if needs_phone(r["url"]) and (r["price"] is None or _is_due(r["last_checked"], force))]
+            if needs_phone(r["url"]) and _needs_check(r, force)]
 
 
 def refresh_link_from_html(conn, link_id: int, html: str) -> dict:

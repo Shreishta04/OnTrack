@@ -21,7 +21,7 @@ import re
 import socket
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -227,6 +227,9 @@ class Product:
     image: str | None = None
     method: str | None = None     # which strategy succeeded
     error: str | None = None
+    # Who downloaded the page and what each try found, for the server's logs
+    # (services.py fills it in; the reader itself never does).
+    attempts: list[dict] = field(default_factory=list, compare=False, repr=False)
 
 
 # ----------------------------------------------------------------- helpers
@@ -445,6 +448,16 @@ def try_json_ld(soup: BeautifulSoup, url: str) -> Product | None:
     return None
 
 
+# A name but no price. When the SERVER downloaded the page, the likely reason
+# is that the price is filled in later by the page's JavaScript, which the
+# server never runs. For a page the phone or the browser extension sent, that
+# guess can be wrong (the extension's page already ran its JavaScript), so
+# services.py swaps in NO_PRICE_FROM_BROWSER for those.
+NO_PRICE_JAVASCRIPT = "Got the name but no price - this page probably loads its price with JavaScript."
+NO_PRICE_FROM_BROWSER = ("Got the name but no price. This isn't a single product page, "
+                         "or OnTrack can't read this store's prices yet.")
+
+
 def try_meta(soup: BeautifulSoup, url: str) -> Product | None:
     def meta(*names):
         for n in names:
@@ -460,8 +473,7 @@ def try_meta(soup: BeautifulSoup, url: str) -> Product | None:
         return None
     return Product(url=url, ok=price is not None, method="meta", title=title,
                    price=price, image=meta("og:image"),
-                   error=None if price is not None else
-                   "Got the name but no price - this page probably loads its price with JavaScript.")
+                   error=None if price is not None else NO_PRICE_JAVASCRIPT)
 
 
 # ------------------------------------------------- JavaScript redirects
