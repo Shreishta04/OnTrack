@@ -15,6 +15,10 @@ npm run dev        # starts the app at http://localhost:5173
 
 Open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`: the backend's CORS setting only allows `localhost`.
 
+### Deployed version
+
+The live app is at **https://on-track-eta.vercel.app**, built by Vercel from this folder on every merge into `main`. Vercel only needs one environment variable, `VITE_API_URL` (the Railway server's address); the API key is never put in Vercel, because `VITE_` values end up in files anyone can download. Type the key once into the app's **Settings**. `vercel.json` here adds the security headers. Details in the main README's *Deployed* section.
+
 ### On the phone (same Wi-Fi)
 
 ```powershell

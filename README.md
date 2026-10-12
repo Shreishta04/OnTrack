@@ -4,7 +4,7 @@
 
 [![Tests](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml/badge.svg)](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml)
 
-**Status:** 🚧 In development. Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ (local network) · Web app ✅ (local, laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres-ready ✅ · Deployment ⏳
+**Status:** 🟢 Live for my own use at **https://on-track-eta.vercel.app** (needs my API key). Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ · Web app ✅ (laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres ✅ · Deployed ✅ (Vercel + Railway + Neon) · Accounts ⏳
 
 ---
 
@@ -437,6 +437,32 @@ Before putting OnTrack on the internet I read the whole project the way an attac
 
 **Deploy files:** `frontend/vercel.json` adds browser security headers. The main one is a *Content Security Policy*: the deployed page may only run its own scripts and only talk to `https` addresses, so even if something slipped past React, injected code couldn't load scripts from elsewhere or talk to plain-`http` servers. Tested in a headless browser: the app renders, and a plain-`http` server is refused. `backend/railway.json` holds the start command and health check, so Railway's settings live in git.
 
+### 29. Deploying: three settings and a surprise plan
+
+Getting OnTrack online took three services (Vercel for the web app, Railway for the server, Neon for the database) and four small problems, each from a setting that worked differently than I assumed.
+
+**1. Railway looked in the wrong folder.**
+- *Symptom:* the first build failed; Railway couldn't work out what kind of app it was.
+- *Cause:* Railway builds from the **top** of the repo by default, but the server lives in `backend/` (that's where `main.py` and `requirements.txt` are). From the top folder it sees only folders, nothing it recognises as a Python app.
+- *Fix:* service settings → **Root Directory** = `/backend`.
+
+**2. Railway didn't find `railway.json`.**
+- *Symptom:* with the root fixed, the start command and health check from `backend/railway.json` were still ignored.
+- *Cause:* the config-file path does **not** follow the Root Directory. It's always counted from the top of the repo.
+- *Fix:* **Config File** = `/backend/railway.json`.
+
+**3. One slash broke CORS.**
+- *Symptom:* the deployed web app couldn't load anything; the browser blocked every request to the server.
+- *Cause:* CORS compares the page's *origin* (scheme + address, never a trailing slash) with `ONTRACK_CORS_ORIGINS` letter for letter. `https://on-track-eta.vercel.app/` with a slash is not the same text as `https://on-track-eta.vercel.app`, so nothing matched.
+- *Fix:* `ONTRACK_CORS_ORIGINS=https://on-track-eta.vercel.app`, no slash.
+
+**4. "Free plan" turned out to be a trial first.**
+- *Symptom:* the account said **Trial: $5, 30 days** instead of the free plan with $1 a month I'd planned around.
+- *Cause:* new Railway accounts start on a 30-day trial with one $5 credit and drop to the free plan afterwards (around 10 November for me).
+- *Fix:* nothing to fix, just to plan for: no upgrade and no card. I check **Usage** for a week, and when the trial ends I check the server still runs (Redeploy if it was paused). Real usage after a day of testing: **$0.0045**, because Serverless mode lets the server sleep between requests.
+
+**Testing the live version** the same day, from the phone on mobile data with the laptop off, found real things too (listed under *Found while using it*): Savana blocks Railway, Tira isn't readable yet, and leftover text in the extension's settings fields (`…vercel.app73`) that it saved without checking.
+
 ### Known limits
 
 - **One time zone, one currency:** "this month" follows one setting (`ONTRACK_TIMEZONE`) and every price is shown in ₹. Each person gets their own time zone and currency with Accounts.
@@ -449,7 +475,10 @@ Before putting OnTrack on the internet I read the whole project the way an attac
 - **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
 - **Postgres isn't tested on my laptop:** Smart App Control blocks it (Challenge 26), so locally the Postgres half of the tests is skipped. GitHub Actions runs it on every push; check the badge at the top before merging.
-- **Local IP address:** while running on the laptop, the Shortcuts and the phone's server setting point at the laptop's Wi-Fi address, which is different at home and at the office (and the app's saved settings don't carry over between addresses). Deployment gives the server one fixed address.
+- **The first request after a quiet spell is slow:** Railway's Serverless mode puts the server to sleep when nobody uses it (that's why it costs almost nothing). The next request wakes it, which takes a few seconds and can answer one **502**; tapping again works.
+- **One key, one list:** everyone with the API key shares the same list and budget. Fine for me; Accounts fix it before anyone else uses OnTrack.
+- **Some stores block the cloud server:** stores can refuse requests from data centres. Amazon always did (the phone or the extension fetches it instead); since deploying, Savana does too (*error 471*). Flipkart, Littlebox and Fastrack-style stores still work from Railway.
+- **Local development still uses the laptop's IP address:** when I run the server on the laptop for development, the Shortcuts and the phone need the laptop's Wi-Fi address, as before. The deployed setup has one fixed address.
 
 ### Found while using it, to fix later
 
@@ -460,16 +489,75 @@ Small things I noticed while testing that don't block anything yet:
 - **Filling in a stuck link answers `201 Created`** although nothing new is created. Nothing reads the code today.
 - **Test client warning** (`StarletteDeprecationWarning`, wants `httpx2`): harmless for now.
 
+Found while testing the deployed version (12 Oct):
+
+- **Savana is blocked from Railway** (*error 471*, a store-specific code). The phone's page reaches the server, but when it has no price the server tries the page itself as a backup, and that's what gets blocked. Next step: test whether the phone's own page has the price; if it does, Savana becomes phone-only like Amazon.
+- **Tira can't be read yet.** The extension sends the finished page (price included), but OnTrack doesn't know where Tira puts the price. Tira's short links (`trbt.ly`) are redirect pages too. Needs a small Tira reader.
+- **The "no price" message guesses wrong for pages from a browser:** "probably loads its price with JavaScript" makes sense for a page the server downloaded, not for one the extension sent after the JavaScript ran.
+- **↻ waits an hour on items without a price** for stores other than Amazon, although the row says it will try again on the next refresh. Amazon's phone list already skips the wait for these.
+- **The list stays on screen after a rejected key**; it should clear on a `401` (and stay for network errors), with an "Enter your API key" message.
+- **No way to see the API key** in Settings; planned: a show/hide toggle, hidden by default.
+- **The add box's message never goes away**; it should clear on new input, with a ✕. Rows without a price could have a **Try again** button.
+- **A blocked page is named after its link** (`https://in.savana.com/details/…`); "Savana item" until it fills in would read better.
+- **The extension saves settings without checking them** (a leftover `73` made `on-track-eta.vercel.app73`). It should check the address, ideally by calling `/health`, before saving. On a non-product page, it could say so before saving anything.
+- **Server logs say little:** only "started" and "slow" lines, without the store link or why a fetch failed. Planned: one clear line per request and per store fetch, full details on errors, and never the key.
+
 ## Store support
 
 | Store | Method | Status |
 |---|---|---|
 | Amazon.in (incl. `amzn.in` short links) | Page from the iPhone or the browser extension (server fetch as a hit-and-miss fallback) · selectors / embedded price data | ✅ laptop (extension) · ✅ iPhone |
 | Fastrack | JSON-LD (`schema.org/Product`) | ✅ laptop · ⏳ iPhone not tested |
-| Savana (incl. share links) | JS redirect follow + embedded app data | ✅ laptop · ✅ iPhone (Copy Link, server fallback) |
+| Savana (incl. share links) | JS redirect follow + embedded app data | ✅ local server · ❌ **deployed: Railway gets error 471**, phone route being tested |
 | Shopify stores (Come Again, Littlebox, …) | `/products/<handle>.js`, JSON-LD fallback | ✅ single products (laptop and iPhone) · ⏳ carts |
-| Flipkart (incl. app links) | Generic page data, links cleaned to `/p/itm…` | ✅ laptop (paste, extension) · ✅ iPhone (Share Sheet, clipboard) · ⏳ MRP not read yet |
+| Flipkart (incl. app links) | Generic page data, links cleaned to `/p/itm…` | ✅ laptop (paste, extension) · ✅ iPhone (Share Sheet, clipboard) · ✅ deployed (Railway fetches it) · ⏳ MRP not read yet |
+| Tira (incl. `trbt.ly` short links) | Name read, price not found | ❌ needs its own reader |
 | Myntra, Ajio, Meesho | Not tested yet | ⏳ |
+
+## Deployed
+
+| Part | Where | Address |
+|---|---|---|
+| Web app | Vercel (project `on-track`) | https://on-track-eta.vercel.app |
+| Server | Railway (service `OnTrack`, Southeast Asia, Serverless on) | https://ontrack-production-8f1d.up.railway.app |
+| Database | Neon (Postgres, AWS Singapore, free 1 GB, direct connection) | only inside Railway's `DATABASE_URL` |
+
+The server address isn't a secret (the web app has to know it), but every request needs the API key, and the rate limits cap what a stranger could do without it.
+
+**How it's wired**
+
+```
+iPhone (Shortcuts, Safari)  ─┐
+Laptop (browser, extension)  ├──► Railway: FastAPI server ──► Neon: Postgres
+Web app from Vercel ─────────┘        (needs X-API-Key)
+```
+
+The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browser then talks to Railway directly. That's why the server's CORS setting names the Vercel address.
+
+**Railway settings** (service → Settings and Variables)
+- Root Directory `/backend`, Config File `/backend/railway.json` (start command and `/health` check live in that file, in git)
+- Variables: `ONTRACK_API_KEY` (a production key, different from my laptop's), `DATABASE_URL` (Neon's connection string), `ONTRACK_TRUST_PROXY=on`, `ONTRACK_DOCS=off`, `ONTRACK_CORS_ORIGINS=https://on-track-eta.vercel.app` (no trailing slash, Challenge 29)
+
+**Vercel settings**
+- Root Directory `frontend`; Vite is detected by itself
+- Environment variable `VITE_API_URL=https://ontrack-production-8f1d.up.railway.app`. **Never `VITE_API_KEY`:** Vite copies `VITE_` values into the files anyone can download. The key is typed once into the app's Settings and stays in that browser.
+- `frontend/vercel.json` adds the security headers (Challenge 28)
+
+**Pointing the phone and the extension at it**
+- Safari → the web app → Settings → key → Share → **Add to Home Screen**
+- **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html`
+- **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html`, with the production key in both
+- Extension → sliders: server and app as above, the production key. Chrome asks once for permission to reach the server. Clear each field completely (Ctrl+A) before pasting
+
+**Redeploying**
+- **Web app and server:** merging into `main` redeploys both automatically. Vercel builds the frontend; Railway rebuilds the backend.
+- **A setting changed** (Railway variable or Vercel environment variable): Railway applies it with a redeploy (it may ask me to click **Deploy**); on Vercel, redeploy the latest deployment so the new value is baked in.
+- **Is it alive?** `https://ontrack-production-8f1d.up.railway.app/health` → `{"ok":true}`. If something fails, Railway → the service → **Deployments → View logs**.
+
+**Costs**
+- Vercel and Neon: free plans. Railway: a 30-day trial with $5 of credit, then the free plan with $1 a month. Usage on day one: **$0.0045**. I check **Usage** for a week, and no upgrade or card without deciding first.
+
+**Moving the data across (once):** `copy_to_postgres.py --sql-out ontrack_copy.sql`, pasted into Neon's SQL Editor (my laptop can't connect to Postgres, Challenge 26). 15 items, 14 links, 39 price checks and 20 moves arrived with their ids; the copy file was deleted afterwards.
 
 ## Getting started (Windows)
 
@@ -720,7 +808,11 @@ OnTrack/
 - [x] GitHub Actions: every push runs the tests on SQLite and Postgres, and builds and lints the frontend
 - [x] Hardening before going public: block private/internal addresses (SSRF), upload size limit, rate limiting, month boundary in India time
 - [x] Security sweep before deploying: fixed a ReDoS, an unspoofable rate limit, http(s)-only links, strong key, docs switch, length limits; browser security headers for Vercel
-- [ ] Deploy: web app on Vercel, backend on Railway (free plan, $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
+- [x] Deploy: web app on Vercel, backend on Railway (trial, then free plan with $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
+- [x] Test the deployed version: phone on mobile data with the laptop off, laptop browser, extension, security spot checks
+- [ ] Fixes found while testing it: Savana from the phone, ↻ retries items without a price, clearer "no price" messages, key show/hide, clear the list on a rejected key, extension checks its settings
+- [ ] Server logs: one line per request and per store fetch, why a fetch failed, never the key
+- [ ] Tira support (tirabeauty.com and `trbt.ly` links)
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [ ] Rethink "Over budget" (each item on its own, or in priority order?)
@@ -791,3 +883,10 @@ OnTrack/
 - `feature/hardening`, one tested commit per step: SSRF block (public addresses only, every redirect checked, the checked address pinned against DNS rebinding); 5 MB upload limit in front of everything, found and fixed a chunked upload answering 400 instead of 413 by testing a real server; rate limiting (60/min, 10/min for page downloads, sliding window, 429 + `Retry-After`); "spent this month" follows `ONTRACK_TIMEZONE` (default `Asia/Kolkata`). 113 tests
 - Decided that currency and country become per-person settings with Accounts, which also unlocks a trial for someone in the US
 - Security sweep: found a ReDoS in the canonical-tag pattern (22 s on 21 KB; now 0.15 s on 5 MB), a way to dodge the rate limit through `X-Forwarded-For` (from a setting I'd planned to use), and pages planting `javascript:` links. Fixed those, plus a minimum key length, a switch for `/docs`, length limits and a refresh-upload limit. Added Vercel security headers and Railway's start settings to git. 123 tests
+- Deployed: a Neon database in Singapore (my data copied in through the SQL Editor), the server on Railway and the web app on Vercel. Fixed Railway's root folder and config path, a trailing slash in the CORS setting, and found the account starts on a trial (Challenge 29). Production key, `ONTRACK_TRUST_PROXY=on`, `ONTRACK_DOCS=off`, no key in Vercel. The app loaded with my real list
+
+**2026-10-12**
+- Tested the deployed version end to end. Server: health, hidden docs, missing key refused, rate limit not fooled by fake `X-Forwarded-For` addresses (10 × 200, then 429), wrong key refused in the app
+- Phone on mobile data with the laptop off: app from the home screen, Amazon share, Flipkart pasted (Railway can read it), Littlebox, Refresh OnTrack, ↻, add by hand, bought/undo/later/delete, budget. A stuck item added again filled the same row, no duplicate
+- Laptop: the extension adds, updates prices and removes non-product pages on the live server; same list as the phone; the Alexa link is clean in Neon; the SSRF block refuses `169.254.169.254`; Railway usage half a cent
+- Found: Savana blocks Railway (error 471), Tira's price isn't read, ↻ waits an hour on items without a price, and a list of small UI fixes (see *Found while using it*)
