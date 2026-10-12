@@ -463,6 +463,29 @@ Getting OnTrack online took three services (Vercel for the web app, Railway for 
 
 **Testing the live version** the same day, from the phone on mobile data with the laptop off, found real things too (listed under *Found while using it*): Savana blocks Railway, Tira isn't readable yet, and leftover text in the extension's settings fields (`…vercel.app73`) that it saved without checking.
 
+### 30. Three small lies the live version told
+
+Testing the deployed app turned up three places where OnTrack said one thing and did another. None was dramatic, but each sent me down the wrong path for a while.
+
+**1. "OnTrack will try again on the next refresh" (it waited an hour).**
+- *Symptom:* a Savana item without a price stayed stuck after ↻, and the note said "Checked 2", which didn't include it.
+- *Cause:* ↻ skips links checked in the last hour, and a **failed** check counts as a check. Amazon's phone list already made an exception for links with no price; the server's ↻ didn't.
+- *Fix:* one rule for both: a link is due if it was checked over an hour ago **or still has no price**. A test adds a refused link, lets the store "work again" minutes later, and checks that ↻ fills it in. It failed on the old code.
+
+**2. "Probably loads its price with JavaScript" (it didn't).**
+- *Symptom:* Tira, added with the extension, said the price probably loads with JavaScript, while the price was right there on my screen.
+- *Cause:* that's the reader's guess when it finds a name but no price, and it's fair for a page the **server** downloaded (the server never runs JavaScript). But the extension sends the **finished** page, after its JavaScript ran.
+- *Fix:* for a page from the phone or the extension, the reason is now *"Got the name but no price. This isn't a single product page, or OnTrack can't read this store's prices yet."* Pages the server downloaded keep the old wording. The real Tira fix (a reader for its pages) is still to do.
+
+**3. The logs said nothing useful.**
+- *Symptom:* to find out why Savana failed, I searched Railway's logs for "savana" and found nothing.
+- *Cause:* the server only logged `started POST /items`, never which store it fetched or why it failed. The reason was only visible by tapping the row in the app.
+- *Fix:* one line for every store page:
+  ```
+  store    link=21  host=in.savana.com  via=server  result=blocked  reason="Store returned HTTP 471 (blocked or not found)"  took=1.2s
+  ```
+  `via` says **who downloaded the page**: `upload` (the phone or the extension) or `server`. When an upload has no price and the server tries itself, both tries are logged, which is exactly the Savana story in two lines. What's deliberately **not** in a log line: the full link (with Accounts, links would show what people shop for; `link=` finds it in the database), the page, request headers, and so never the API key. Web addresses inside error messages (curl likes to repeat the link) become `<link>`. A test makes requests with the right key, a wrong key and a secret-looking product link, and fails if any of them appears in the logs.
+
 ### Known limits
 
 - **One time zone, one currency:** "this month" follows one setting (`ONTRACK_TIMEZONE`) and every price is shown in ₹. Each person gets their own time zone and currency with Accounts.
@@ -472,7 +495,7 @@ Getting OnTrack online took three services (Vercel for the web app, Railway for 
 - **The extension is loaded by hand** (Developer mode → Load unpacked), not from the Chrome Web Store, so it shows a small "unpacked" badge, and after editing its files it needs a reload in `chrome://extensions`.
 - **"Over budget" follows list order:** items are added up in list order, so after one expensive item, even a cheap one shows *Over budget*. To be redesigned.
 - **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
-- **A link that never gets a price** (for example a removed product) is downloaded on every Refresh. Cheap, but worth knowing; delete the item.
+- **A link that never gets a price** (for example a removed product, or a store that blocks the server) is tried again on **every** ↻, since links without a price skip the one-hour wait. Cheap, and the rate limits cap it, but worth knowing; delete the item or add it by hand.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
 - **Postgres isn't tested on my laptop:** Smart App Control blocks it (Challenge 26), so locally the Postgres half of the tests is skipped. GitHub Actions runs it on every push; check the badge at the top before merging.
 - **The first request after a quiet spell is slow:** Railway's Serverless mode puts the server to sleep when nobody uses it (that's why it costs almost nothing). The next request wakes it, which takes a few seconds and can answer one **502**; tapping again works.
@@ -493,14 +516,11 @@ Found while testing the deployed version (12 Oct):
 
 - **Savana is blocked from Railway** (*error 471*, a store-specific code). The phone's page reaches the server, but when it has no price the server tries the page itself as a backup, and that's what gets blocked. Next step: test whether the phone's own page has the price; if it does, Savana becomes phone-only like Amazon.
 - **Tira can't be read yet.** The extension sends the finished page (price included), but OnTrack doesn't know where Tira puts the price. Tira's short links (`trbt.ly`) are redirect pages too. Needs a small Tira reader.
-- **The "no price" message guesses wrong for pages from a browser:** "probably loads its price with JavaScript" makes sense for a page the server downloaded, not for one the extension sent after the JavaScript ran.
-- **↻ waits an hour on items without a price** for stores other than Amazon, although the row says it will try again on the next refresh. Amazon's phone list already skips the wait for these.
 - **The list stays on screen after a rejected key**; it should clear on a `401` (and stay for network errors), with an "Enter your API key" message.
 - **No way to see the API key** in Settings; planned: a show/hide toggle, hidden by default.
 - **The add box's message never goes away**; it should clear on new input, with a ✕. Rows without a price could have a **Try again** button.
 - **A blocked page is named after its link** (`https://in.savana.com/details/…`); "Savana item" until it fills in would read better.
 - **The extension saves settings without checking them** (a leftover `73` made `on-track-eta.vercel.app73`). It should check the address, ideally by calling `/health`, before saving. On a non-product page, it could say so before saving anything.
-- **Server logs say little:** only "started" and "slow" lines, without the store link or why a fetch failed. Planned: one clear line per request and per store fetch, full details on errors, and never the key.
 
 ## Store support
 
@@ -553,6 +573,7 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 - **Web app and server:** merging into `main` redeploys both automatically. Vercel builds the frontend; Railway rebuilds the backend.
 - **A setting changed** (Railway variable or Vercel environment variable): Railway applies it with a redeploy (it may ask me to click **Deploy**); on Vercel, redeploy the latest deployment so the new value is baked in.
 - **Is it alive?** `https://ontrack-production-8f1d.up.railway.app/health` → `{"ok":true}`. If something fails, Railway → the service → **Deployments → View logs**.
+- **Reading the logs:** search for `store` to see every store page (`result=ok`, `no-price`, `blocked`, `network` or `refused`, with the reason), or for `link=21` to follow one product. `via=upload` means the phone or the extension downloaded the page; `via=server` means the server did.
 
 **Costs**
 - Vercel and Neon: free plans. Railway: a 30-day trial with $5 of credit, then the free plan with $1 a month. Usage on day one: **$0.0045**. I check **Usage** for a week, and no upgrade or card without deciding first.
@@ -730,7 +751,7 @@ All endpoints except `/health` require the `X-API-Key` header. Besides the usual
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
 | `DELETE` | `/items/{id}` · `/links/{id}` | Remove an item or a link |
-| `POST` | `/refresh?force=` | Re-check prices: skips bought items, links checked in the last hour, and phone-only stores (Amazon). Returns `checked`, `skipped_recent`, `phone_only`, `changed`, `failed` |
+| `POST` | `/refresh?force=` | Re-check prices: skips bought items, links checked in the last hour (unless they still have no price), and phone-only stores (Amazon). Returns `checked`, `skipped_recent`, `phone_only`, `changed`, `failed` |
 | `POST` | `/items/{id}/refresh` | Re-check one item |
 | `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, and either not checked in the last hour or still without a price |
 | `POST` | `/links/{id}/from-html` | Upload a fresh page for one link (phone refresh, or the extension's **Update price**); records the new price |
@@ -748,7 +769,7 @@ OnTrack/
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 123, half of them run on SQLite and Postgres
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 131, half of them run on SQLite and Postgres
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -810,8 +831,9 @@ OnTrack/
 - [x] Security sweep before deploying: fixed a ReDoS, an unspoofable rate limit, http(s)-only links, strong key, docs switch, length limits; browser security headers for Vercel
 - [x] Deploy: web app on Vercel, backend on Railway (trial, then free plan with $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
 - [x] Test the deployed version: phone on mobile data with the laptop off, laptop browser, extension, security spot checks
-- [ ] Fixes found while testing it: Savana from the phone, ↻ retries items without a price, clearer "no price" messages, key show/hide, clear the list on a rejected key, extension checks its settings
-- [ ] Server logs: one line per request and per store fetch, why a fetch failed, never the key
+- [x] Live fixes: ↻ retries items without a price, a clearer "no price" reason for pages from the phone or extension, one log line per store page (no links, never the key)
+- [ ] UI fixes found while testing it: key show/hide, clear the list on a rejected key, add-box message, Try again on stuck rows, extension checks its settings
+- [ ] Savana on the deployed version (blocked from Railway; parked for now)
 - [ ] Tira support (tirabeauty.com and `trbt.ly` links)
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
@@ -890,3 +912,4 @@ OnTrack/
 - Phone on mobile data with the laptop off: app from the home screen, Amazon share, Flipkart pasted (Railway can read it), Littlebox, Refresh OnTrack, ↻, add by hand, bought/undo/later/delete, budget. A stuck item added again filled the same row, no duplicate
 - Laptop: the extension adds, updates prices and removes non-product pages on the live server; same list as the phone; the Alexa link is clean in Neon; the SSRF block refuses `169.254.169.254`; Railway usage half a cent
 - Found: Savana blocks Railway (error 471), Tira's price isn't read, ↻ waits an hour on items without a price, and a list of small UI fixes (see *Found while using it*)
+- `feature/live-fixes`: ↻ now retries items without a price instead of waiting an hour; pages from the phone or extension no longer blame JavaScript; every store page gets one log line (store, who downloaded it, result, reason, time), with a test that the key and full links never appear (Challenge 30). Savana parked. 131 tests

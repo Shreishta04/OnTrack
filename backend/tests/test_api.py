@@ -163,6 +163,41 @@ def test_refresh_cooldown_force_and_price_history(client):
     assert link["previous_price"] == 273 and link["lowest_price_seen"] == 250
 
 
+def test_refresh_retries_links_without_a_price_straight_away(client):
+    """A link the store refused has no price. The next tap on ↻ should try it
+    again, not skip it for an hour like a link that was read fine. (The row
+    promises "OnTrack will try again on the next refresh".)"""
+    stuck = client.post("/items/from-link", json={"url": "https://blocked.example/p"}, headers=H).json()
+    client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H)
+    assert stuck["needs_price"]
+
+    client.catalogue["https://blocked.example/p"] = Product(       # the store lets us in now
+        url="https://blocked.example/p", ok=True, title="Mystery Item", price=850, method="json-ld")
+    r = client.post("/refresh", headers=H).json()                  # no force, minutes later
+    assert r["checked"] == 1 and r["skipped_recent"] == 1          # the stuck one, not the priced one
+    assert client.get(f"/items/{stuck['id']}", headers=H).json()["price"] == 850
+
+
+def test_no_price_message_depends_on_who_downloaded_the_page(client):
+    """'Probably loads its price with JavaScript' is a fair guess for a page the
+    SERVER downloaded. For a page the extension sent (already run through the
+    browser, price on screen) it's wrong, so the reason given changes."""
+    from extractor import NO_PRICE_FROM_BROWSER, NO_PRICE_JAVASCRIPT
+    url = "https://www.tirabeauty.com/product/lip-tint"
+    client.catalogue[url] = Product(url=url, title="Lip Tint", error=NO_PRICE_JAVASCRIPT)   # server: same
+
+    page = '<html><head><meta property="og:title" content="Lip Tint"></head><body>₹1,350</body></html>'
+    item = client.post("/items/from-html", data={"url": url},
+                       files={"html": ("p.html", page, "text/html")}, headers=H).json()
+    assert item["needs_price"]
+    assert item["links"][0]["last_error"] == NO_PRICE_FROM_BROWSER
+    assert "JavaScript" not in item["links"][0]["last_error"]
+
+    client.delete(f"/items/{item['id']}", headers=H)
+    item = client.post("/items/from-link", json={"url": url}, headers=H).json()   # the server's own try
+    assert item["links"][0]["last_error"] == NO_PRICE_JAVASCRIPT
+
+
 def test_failed_refresh_keeps_last_price(client):
     item = client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H).json()
     client.catalogue["https://www.savana.com/details/1"] = Product(
@@ -377,6 +412,54 @@ def test_each_request_is_logged_when_it_starts(client, caplog):
         client.get("/summary", headers=H)
     assert "started  GET /summary" in caplog.text
 
+
+
+def test_store_pages_are_logged_with_who_fetched_them_and_why_they_failed(client, caplog):
+    """Each store page gets one log line: link id, store, who downloaded it
+    (the server, or an upload from the phone or extension), the result and
+    the reason. That's what Railway's logs were missing when Savana failed."""
+    import logging
+    page = '<html><head><meta property="og:title" content="Mystery Item"></head></html>'
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        server = client.post("/items/from-link", json={"url": "https://www.savana.com/details/1"}, headers=H).json()
+        upload = client.post("/items/from-html", data={"url": "https://blocked.example/p"},
+                             files={"html": ("p.html", page, "text/html")}, headers=H).json()
+
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("store")]
+    ok_line = next(l for l in lines if f"link={server['links'][0]['id']}" in l)
+    assert "host=www.savana.com" in ok_line and "via=server" in ok_line
+    assert "result=ok" in ok_line and "price=273" in ok_line and "took=" in ok_line
+
+    # The upload had no price, so the server tried itself and was refused: both tries are logged.
+    tries = [l for l in lines if f"link={upload['links'][0]['id']}" in l]
+    assert [("via=upload" in l, "via=server" in l) for l in tries] == [(True, False), (False, True)]
+    assert "result=no-price" in tries[0]
+    assert "result=blocked" in tries[1] and 'reason="Store returned HTTP 403"' in tries[1]
+
+
+def test_logs_never_contain_the_key_or_full_links(client, caplog):
+    """The logs are read on Railway's website. They must never show the API key
+    (right or wrong), and only a store's name, not the full link: with
+    Accounts, full links would show what people are shopping for."""
+    import logging
+    wrong = "a-wrong-key-that-someone-tried-0123456789"
+    client.catalogue["https://slow.example/secret-product"] = Product(
+        url="https://slow.example/secret-product",
+        error="Network error: Timeout: Failed to perform, curl: (28) for https://slow.example/secret-product")
+    page = '<html><head><meta property="og:title" content="Lip Tint"></head></html>'
+    with caplog.at_level(logging.DEBUG):
+        client.get("/summary", headers=H)
+        client.get("/summary", headers={"X-API-Key": wrong})
+        client.post("/items/from-link", json={"url": "https://slow.example/secret-product"}, headers=H)
+        client.post("/items/from-html", data={"url": "https://www.amazon.in/dp/B0SECRETPRD"},
+                    files={"html": ("p.html", page, "text/html")}, headers=H)
+        client.post("/refresh", headers=H)
+
+    text = caplog.text
+    assert "store" in text and "host=slow.example" in text and "result=network" in text
+    assert KEY not in text and wrong not in text
+    assert "secret-product" not in text and "B0SECRETPRD" not in text
+    assert "<link>" in text                                  # the address inside curl's message was hidden
 
 
 def test_phone_list_includes_links_with_no_price_even_if_just_checked(client):
