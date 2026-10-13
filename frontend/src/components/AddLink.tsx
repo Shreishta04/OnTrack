@@ -5,9 +5,10 @@ import { isAmazon } from '../format'
 
 interface AddLinkProps {
   onAdded: (item: Item) => Promise<void>
+  label?: string // "From a link" inside the phone's add sheet, which already says "Add something"
 }
 
-export default function AddLink({ onAdded }: AddLinkProps) {
+export default function AddLink({ onAdded, label = 'Add something' }: AddLinkProps) {
   const [url, setUrl] = useState('')
   const [adding, setAdding] = useState(false)
   const [message, setMessage] = useState<{ text: string; tone: 'muted' | 'warn' } | null>(null)
@@ -38,7 +39,7 @@ export default function AddLink({ onAdded }: AddLinkProps) {
 
   return (
     <section className="card add-card" aria-label="Add an item">
-      <label className="eyebrow" htmlFor="add-link">Add something</label>
+      <label className="eyebrow" htmlFor="add-link">{label}</label>
       <form className="add-form" onSubmit={handleSubmit}>
         <input
           id="add-link"
@@ -59,8 +60,19 @@ export default function AddLink({ onAdded }: AddLinkProps) {
           {message.text}
         </p>
       ) : (
-        <p className="budget-note">Or share from any app with the “Add to OnTrack” Shortcut. For Amazon, sharing from the iPhone works best.</p>
+        <p className="budget-note">{shareHint()}</p>
       )}
     </section>
   )
+}
+
+// How else to add things, on this kind of device.
+function shareHint(): string {
+  if (/Android/.test(navigator.userAgent)) {
+    return 'Or share a product from any app to OnTrack (once it’s installed). If a store hides its price, add it by hand.'
+  }
+  if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+    return 'Or share from any app with the “Add to OnTrack” Shortcut. For Amazon, sharing from the iPhone works best.'
+  }
+  return 'Or use the OnTrack browser extension on a product page. For Amazon, the extension or the iPhone works best.'
 }

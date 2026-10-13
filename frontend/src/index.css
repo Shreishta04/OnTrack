@@ -210,7 +210,7 @@ input {
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--bg);
-  font-size: 15px;
+  font-size: 16px; /* 16px or more: iPhone Safari zooms into any smaller text box you tap */
   transition: border-color 0.2s ease, background-color 0.45s ease;
 }
 .field::placeholder {
@@ -228,7 +228,10 @@ input {
 .page {
   max-width: 1120px;
   margin: 0 auto;
-  padding: 28px 20px 96px;
+  /* env(safe-area-inset-…): the space taken by the notch, round corners and
+     the home bar when the app fills the whole screen (viewport-fit=cover). */
+  padding: max(28px, calc(env(safe-area-inset-top) + 12px)) max(20px, env(safe-area-inset-right))
+    calc(96px + env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 28px;
@@ -698,9 +701,11 @@ input {
   position: relative;
   width: min(560px, 100%);
   max-height: 92vh;
+  max-height: 92dvh;
   overflow-y: auto;
+  overscroll-behavior: contain; /* scrolling the sheet doesn't scroll the page behind it */
   border-radius: 26px 26px 0 0;
-  padding: 28px 24px 32px;
+  padding: 28px 24px calc(32px + env(safe-area-inset-bottom));
   animation: sheet-up 0.38s var(--ease);
 }
 
@@ -841,6 +846,11 @@ input {
   }
   .header .eyebrow {
     letter-spacing: 0.1em;
+  }
+  /* "WISH LIST" on one line, like the other tabs */
+  .tab {
+    letter-spacing: 0.1em;
+    white-space: nowrap;
   }
 }
 
@@ -1048,4 +1058,94 @@ select.field option {
 .reveal-foot .btn {
   height: 38px;
   flex-shrink: 0;
+}
+
+/* ============================================================
+   Phone: the + button, the add sheet, offline
+   ============================================================ */
+
+/* The round + button, bottom right, clear of the home bar. Only on the
+   phone layout (App.tsx), where the add forms move into a sheet. */
+.fab {
+  position: fixed;
+  right: max(20px, calc(env(safe-area-inset-right) + 16px));
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
+  z-index: 10;
+  width: 60px;
+  height: 60px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 18px rgba(43, 33, 28, 0.22), 0 2px 4px rgba(43, 33, 28, 0.12);
+  cursor: pointer;
+  animation: fade-up 0.3s var(--ease);
+  transition: transform 0.12s ease, filter 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.fab:active {
+  transform: scale(0.94);
+}
+
+/* Inside the add sheet the two forms are sections, not cards on a card. */
+.add-sheet .sheet-head {
+  align-items: center;
+  margin-bottom: 8px;
+}
+.add-sheet .add-card {
+  padding: 18px 0 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.add-sheet .add-card + .add-card {
+  margin-top: 4px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.add-sheet .sheet-body {
+  gap: 0;
+}
+
+/* "Offline · showing your list from 10:42" */
+.offline-note {
+  margin: -12px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  animation: fade-up 0.3s var(--ease);
+}
+.dot-offline {
+  background: var(--warn-dot);
+}
+
+/* A hint on the sign-in screen about adding OnTrack to the home screen. */
+.install-tip {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.install-tip strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* No grey flash on tap, and no rubber-band bounce showing behind the app. */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+html,
+body {
+  overscroll-behavior-y: none;
 }
