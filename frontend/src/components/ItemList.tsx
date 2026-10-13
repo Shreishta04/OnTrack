@@ -13,9 +13,12 @@ interface ItemListProps {
   items: Item[]
   tab: TabId
   onAction: (item: Item, action: RowAction) => Promise<void>
+  picked: Set<number> // ticked item ids (Wish list and Later only)
+  onPick: (item: Item) => void
 }
 
-export default function ItemList({ items, tab, onAction }: ItemListProps) {
+export default function ItemList({ items, tab, onAction, picked, onPick }: ItemListProps) {
+  const canPick = tab === 'planned' || tab === 'later'
   if (items.length === 0) {
     const [title, text] = EMPTY[tab]
     return (
@@ -29,7 +32,14 @@ export default function ItemList({ items, tab, onAction }: ItemListProps) {
   return (
     <div className="list" role="tabpanel">
       {items.map((item) => (
-        <ItemRow key={item.id} item={item} showTag={tab === 'all'} onAction={onAction} />
+        <ItemRow
+          key={item.id}
+          item={item}
+          showTag={tab === 'all'}
+          onAction={onAction}
+          picked={canPick ? picked.has(item.id) : undefined}
+          onPick={() => onPick(item)}
+        />
       ))}
     </div>
   )

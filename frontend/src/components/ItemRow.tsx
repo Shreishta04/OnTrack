@@ -6,14 +6,14 @@ import Thumb from './Thumb'
 
 const TAG = { planned: 'Wish list', later: 'Later', purchased: 'Bought' }
 
-// The coloured note beside the store name.
+// The coloured note beside the store name. No "fits / over budget" here any
+// more: one running total made every row after the first big item say
+// "Over budget". Tick items instead and the selection bar adds them up.
 function badgeFor(item: Item): { text: string; tone: 'good' | 'warn' | 'muted' } | null {
   if (item.status === 'later') return { text: 'Parked', tone: 'muted' }
   if (item.status === 'purchased') return { text: `Bought ${shortDate(item.purchased_at)}`, tone: 'muted' }
   if (item.needs_price) return { text: 'Needs a price', tone: 'warn' }
-  if (item.fits_budget === true) return { text: 'Fits budget', tone: 'good' }
-  if (item.fits_budget === false) return { text: 'Over budget', tone: 'warn' }
-  return null // no budget set yet
+  return null
 }
 
 // What a button in a row can ask for: move to a list, or delete.
@@ -23,9 +23,11 @@ interface ItemRowProps {
   item: Item
   showTag: boolean
   onAction: (item: Item, action: RowAction) => Promise<void>
+  picked?: boolean // undefined: this tab has no ticking (Bought, All)
+  onPick?: () => void
 }
 
-export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
+export default function ItemRow({ item, showTag, onAction, picked, onPick }: ItemRowProps) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)               // a request is in progress
   const [confirmDelete, setConfirmDelete] = useState(false) // first tap on Delete
@@ -59,7 +61,22 @@ export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
       : 0
 
   return (
-    <div className={open ? 'row open' : 'row'}>
+    <div className={`row${open ? ' open' : ''}${picked ? ' is-picked' : ''}`}>
+      <div className="row-line">
+      {picked !== undefined && (
+        <button
+          className={picked ? 'pick is-on' : 'pick'}
+          role="checkbox"
+          aria-checked={picked}
+          aria-label={`Select ${item.name}`}
+          onClick={onPick}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"
+            strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M5 12.5l4.5 4.5L19 7.5" />
+          </svg>
+        </button>
+      )}
       <button className="row-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         {/* An item still named after its URL would show "H" (from https), so use the store's letter */}
         <Thumb src={item.image} name={item.name.startsWith('http') ? storeName(item) : item.name} />
@@ -91,6 +108,7 @@ export default function ItemRow({ item, showTag, onAction }: ItemRowProps) {
           <path d="M12 5v14M5 12h14" />
         </svg>
       </button>
+      </div>
 
       {open && (
         <div className="row-details">
