@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices, save, saved } from './api'
-import type { Item, Me, Summary } from './types'
+import type { Item, Me, Status, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
 import Tabs, { type TabId } from './components/Tabs'
 import ItemList from './components/ItemList'
@@ -14,6 +14,7 @@ import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
 import AddByHand from './components/AddByHand'
 import AddSheet from './components/AddSheet'
+import SelectionBar, { type BulkAction } from './components/SelectionBar'
 import { usePhone } from './hooks/usePhone'
 
 // An invite or reset link opens the app as /?invite=CODE or /?reset=CODE.
@@ -112,6 +113,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   const [note, setNote] = useState<{ text: string; tone: 'muted' | 'warn' } | null>(null)
   const [offlineSince, setOfflineSince] = useState<string | null>(null) // set: showing the saved copy
   const [adding, setAdding] = useState(false) // the phone's add sheet
+  const [picked, setPicked] = useState<Set<number>>(new Set()) // ticked items: a "what if", nothing saved
   const theme = useTheme()
   const phone = usePhone()
 
@@ -233,8 +235,54 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
 
   const visible = tab === 'all' ? items : items.filter((i) => i.status === tab)
 
+  // Ticking belongs to one tab: switching tabs starts fresh.
+  function changeTab(next: TabId) {
+    setTab(next)
+    setPicked(new Set())
+  }
+
+  function togglePick(item: Item) {
+    setPicked((now) => {
+      const next = new Set(now)
+      if (next.has(item.id)) next.delete(item.id)
+      else next.add(item.id)
+      return next
+    })
+  }
+
+  // Only items still on this tab count (one may have moved meanwhile).
+  const pickedItems = visible.filter((i) => picked.has(i.id))
+
+  // A button in the selection bar: move the ticked items (or, for "Park the
+  // rest", every unticked wish-list item), one request each, then reload once.
+  async function handleBulk(action: BulkAction) {
+    if (offlineSince) {
+      setNote({ text: 'You’re offline. Changes need a connection.', tone: 'warn' })
+      return
+    }
+    const parkRest = action === 'park-rest'
+    const status: Status = parkRest ? 'later' : action.move
+    const targets = parkRest ? visible.filter((i) => !picked.has(i.id)) : pickedItems
+    try {
+      await Promise.all(targets.map((i) => patchItem(i.id, { status })))
+      const n = targets.length
+      const things = `${n} ${n === 1 ? 'item' : 'items'}`
+      setNote({
+        text: status === 'purchased' ? `Marked ${things} as bought.`
+          : status === 'later' ? `Moved ${things} to Later.` : `Moved ${things} back to your wish list.`,
+        tone: 'muted',
+      })
+      setPicked(new Set())
+    } catch (e) {
+      setNote({ text: (e as Error).message, tone: 'warn' })
+    }
+    await load()
+  }
+
+  const selecting = pickedItems.length > 0 && (tab === 'planned' || tab === 'later')
+
   return (
-    <div className="page">
+    <div className={selecting ? 'page has-bar' : 'page'}>
       <header className="header">
         <div>
           <div className="brand">OnTrack</div>
@@ -284,17 +332,26 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
         </aside>
 
         <main className="main">
-          <Tabs active={tab} counts={counts} onChange={setTab} />
+          <Tabs active={tab} counts={counts} onChange={changeTab} />
           {/* key={tab}: a new tab means a fresh list, which replays the fade-in */}
           {summary && (
             <div key={tab} className="fade-in">
-              <ItemList items={visible} tab={tab} onAction={handleAction} />
+              <ItemList items={visible} tab={tab} onAction={handleAction} picked={picked} onPick={togglePick} />
             </div>
           )}
         </main>
       </div>
 
-      {phone && summary && !offlineSince && (
+      {selecting && summary && (
+        <SelectionBar
+          tab={tab as 'planned' | 'later'}
+          picked={pickedItems}
+          summary={summary}
+          onAction={handleBulk}
+          onClear={() => setPicked(new Set())}
+        />
+      )}
+      {phone && summary && !offlineSince && !selecting && (
         <button className="fab" aria-label="Add something" onClick={() => setAdding(true)}>
           <PlusIcon />
         </button>

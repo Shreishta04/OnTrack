@@ -59,7 +59,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 **Budget**
 - **Total uses the discounted price**; MRP is shown alongside, with total savings
 - **Spent this month** comes off the budget: `remaining = budget − spent this month − planned`
-- **What fits:** planned items are walked in priority order, and each is marked as fitting the budget or not
+- **What fits, by ticking:** tick items on the wish list and a bar slides up with their total, live: *"3 selected · ₹2,947 · ₹53 left this month"* (or *"₹1,947 over"*), compared with the budget minus what's already spent. On **Later**, ticked items are compared with what's left **after** the wish list (*"with your wish list"*), to see what can come back. Nothing changes until a button is pressed: **Mark bought**, **Move to Later**, **Park the rest** (every unticked wish-list item goes to Later), or **Back to wish list**
 
 **On the phone (installable app)**
 - **Installs like an app:** iPhone: Safari → Share → *Add to Home Screen*. Android: Chrome → ⋮ → *Install app*. It gets the OnTrack icon (a serif O over a sage line), opens full screen without the browser's bars, and keeps clear of the notch and the home bar
@@ -72,7 +72,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 **Web app**
 - **Budget card:** one big number, "Left after wish list" (or "Over budget" in clay), a bar showing spent / planned / left, and the three totals underneath. **Edit budget** opens a small form right inside the card
 - **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
-- **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a status badge (Fits budget / Over budget / Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
+- **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a round tick box (Wish list and Later), a status badge (Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
 - **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
 - **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone (or added with the browser extension)
 - **When a store won't give a price,** the row says **why** in plain words (*"Amazon showed a bot-check page…"*, *"The store took too long to answer."* instead of raw `curl` errors) and **what to do**: for Amazon, tap *Refresh OnTrack* on the iPhone or share it from there, and the name, photo and price fill in by themselves
@@ -163,7 +163,7 @@ Deleting an item removes its links, price history and status history with it (`O
 The look was agreed in a clickable mockup before any React was written, so colours, spacing and wording could change cheaply.
 
 - **Inspiration:** calm, editorial websites: warm neutrals, a serif for headings, tiny spaced-out uppercase labels, thin dividers with **+** to expand, rounded pill buttons, lots of empty space.
-- **Palette "Linen & Espresso":** linen background, warm-white cards, espresso text, cocoa accent, sand lines. Colour only carries meaning: **sage** means good news (fits budget, price dropped), **clay** means attention (over budget, errors). The dark version ("Espresso at night") is a warm brown-black, with each colour lightened just enough to stay readable.
+- **Palette "Linen & Espresso":** linen background, warm-white cards, espresso text, cocoa accent, sand lines. Colour only carries meaning: **sage** means good news (money left, price dropped), **clay** means attention (over budget, errors). The dark version ("Espresso at night") is a warm brown-black, with each colour lightened just enough to stay readable.
 - **Type:** Cormorant Garamond (serif) for the title, headings and empty states; DM Sans for everything else. Numbers use DM Sans with **tabular figures**, so prices line up in a column. The **₹** is drawn smaller and softer than the digits, so "₹557" reads as an amount rather than one long shape.
 - **Motion:** the tab underline glides, lists fade in, rows open smoothly, buttons press slightly. Everything turns off for people who ask their device for reduced motion.
 - **Decisions from using it:**
@@ -552,6 +552,14 @@ Most people will use OnTrack on their phone, from the home screen, so this round
 
 **5. Two small truths.** The tab icon was still Vite's purple lightning bolt; and the hint under the link box told Android users about the iPhone Shortcut. Both now fit the device.
 
+### 33. "Over budget" on almost every row
+
+- *Symptom:* with a ₹1,000 budget and ₹15,774 of plans, nearly every row said *Over budget* in clay, including a ₹245 lipstick.
+- *Cause:* the server walks planned items in list order with a running total, and marks every item after the total passes the budget. True for the list as a whole, meaningless for any one item: it depends on which items happen to come first.
+- *Decision:* no budget tag on rows at all. The budget card already says whether the whole wish list fits. The question people actually have is *"if I bought just these, would I be OK?"*, so: tick items, and a bar adds them up live and says how much is left or over. It's only a what-if: nothing changes until one of its buttons is pressed, and those buttons finally give **Later** a job (*Park the rest* moves everything unticked there in one tap; on Later, *Back to wish list* brings things back once they fit).
+- *Considered:* a priority order (needs a way to rank items, and lower rows still get tags) and "fits on its own" (still a tag on every row, and it ignores everything else planned).
+- *How:* all in the web app. The bar uses the totals `/summary` already sends; bulk buttons send one `PATCH /items/{id}` per item, then reload once. Ticks reset when the tab changes. The server's `fits_budget` field is no longer shown (left in place for now).
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -565,7 +573,6 @@ Most people will use OnTrack on their phone, from the home screen, so this round
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
 - **The extension is loaded by hand** (Developer mode → Load unpacked), not from the Chrome Web Store, so it shows a small "unpacked" badge, and after editing its files it needs a reload in `chrome://extensions`.
-- **"Over budget" follows list order:** items are added up in list order, so after one expensive item, even a cheap one shows *Over budget*. To be redesigned.
 - **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
 - **A link that never gets a price** (for example a removed product, or a store that blocks the server) is tried again on **every** ↻, since links without a price skip the one-hour wait. Cheap, and the rate limits cap it, but worth knowing; delete the item or add it by hand.
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
@@ -879,6 +886,7 @@ OnTrack/
             ├── AddLink.tsx        paste-a-link box
             ├── AddByHand.tsx      name, optional link, price
             ├── AddSheet.tsx       the phone's add sheet, behind the + button
+            ├── SelectionBar.tsx   ticked items: live total, left / over, bulk moves
             ├── Tabs.tsx           Wish list · Later · Bought · All
             ├── ItemList.tsx       the rows for the current tab
             ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
@@ -927,7 +935,7 @@ OnTrack/
 - [ ] Tira support (tirabeauty.com and `trbt.ly` links)
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
-- [ ] Rethink "Over budget" (each item on its own, or in priority order?)
+- [x] Replace the per-row "Over budget" tags with ticking: a live selection bar (total, left or over) and bulk Mark bought / Move to Later / Park the rest / Back to wish list
 - [ ] Flipkart MRP (the struck-through price)
 - [x] Accounts: invite-only sign-up, email + password, own list and budget, device keys for the Shortcuts and extension, reset links, my existing list moved into my account
 - [x] Per-person currency, country and time zone
@@ -1013,3 +1021,4 @@ OnTrack/
 - Web app: a sign-in screen (log in, sign up from an invite link, new password from a reset link) and an Account sheet (profile, device keys, people and invites, password, log out), in the same linen-and-cocoa design. A rejected login now clears the list and returns to sign-in
 - 40 new tests (all fail on the old code), 171 in total on SQLite and Postgres 16; ran the whole flow in headless Chromium: owner sign-up, device key, invite, a US friend's own dollar list in dark mode
 - `feature/pwa`: OnTrack as a phone app. A manifest (name, serif-O icon, full screen, Android **share target**), a hand-written service worker that keeps the app's files for offline (never the server's answers), and the last list saved in the browser for a read-only offline view with "Offline · showing your list from …". On the phone the add forms moved into a sheet behind a **+** button, text boxes went to 16px (no iPhone zoom), content keeps clear of the notch and home bar, "WISH LIST" fits on one line, and the sign-in screen explains installing per phone. Tested the production build in headless Chromium as an iPhone and an Android phone: installed service worker, network cut and page reloaded, Android share after a log-in, log-out wiping the saved copy
+- `feature/selection-bar`: removed the per-row *Fits / Over budget* tags (one running total made nearly every row "over"). Rows on Wish list and Later get a round tick box; ticking slides up a bar with the total and how much is left or over, live (wish list: against budget − spent; Later: also minus the wish list). Buttons: Mark bought, Move to Later, Park the rest, Back to wish list. Tested in headless Chromium against hand-worked numbers (₹1,939 of ₹3,000 → ₹1,061 left; adding ₹1,999 → ₹938 over; Park the rest moved exactly the 2 unticked items; the server's totals matched afterwards)

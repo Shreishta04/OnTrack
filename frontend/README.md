@@ -80,6 +80,7 @@ src/
     ├── AddLink.tsx        paste-a-link box
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
     ├── AddSheet.tsx       the phone's add sheet: both add forms, behind the + button
+    ├── SelectionBar.tsx   ticked items: live total, left / over, Mark bought · Move to Later · Park the rest · Back to wish list
     ├── Tabs.tsx           Wish list · Later · Bought · All, sliding underline
     ├── ItemList.tsx       the rows for the current tab, or an empty message
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
