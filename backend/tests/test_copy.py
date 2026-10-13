@@ -16,6 +16,16 @@ TEST_PG = os.getenv("TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not TEST_PG, reason="TEST_DATABASE_URL not set")
 
 
+UID = 1
+
+
+def _owner(conn) -> int:
+    """An account to own the list (the app needs one for every item)."""
+    return conn.execute("INSERT INTO users (email, name, password_hash, created_at) "
+                        "VALUES ('o@example.com', 'O', 'x', '2026-10-01T00:00:00+00:00') "
+                        "RETURNING id").fetchone()["id"]
+
+
 @pytest.fixture
 def sqlite_list(tmp_path, monkeypatch):
     """A SQLite file with a budget, items in every list, links, price history and moves."""
@@ -23,16 +33,18 @@ def sqlite_list(tmp_path, monkeypatch):
     path = str(tmp_path / "ontrack.db")
     conn = db.connect(path)
     db.init(conn)
-    services.set_budget(conn, 5000)
+    global UID
+    UID = _owner(conn)
+    services.set_budget(conn, UID, 5000)
 
     watch = Product(url="https://www.amazon.in/dp/B0WATCH", ok=True, title="Fastrack Ryz Watch",
                     price=1999, mrp=3499, method="amazon")
-    watch_id = services.create_item_from_link(conn, watch.url, lambda u: watch)
-    later_id = services.create_manual_item(conn, "Milk frother", 439)
-    bought_id = services.create_manual_item(conn, "MARS lipstick", 237)
-    services.update_item(conn, later_id, status="later")
-    services.update_item(conn, bought_id, status="purchased")
-    services.delete_item(conn, services.create_manual_item(conn, "Deleted thing", 10))  # leaves a gap in ids
+    watch_id = services.create_item_from_link(conn, UID, watch.url, lambda u: watch)
+    later_id = services.create_manual_item(conn, UID, "Milk frother", 439)
+    bought_id = services.create_manual_item(conn, UID, "MARS lipstick", 237)
+    services.update_item(conn, UID, later_id, status="later")
+    services.update_item(conn, UID, bought_id, status="purchased")
+    services.delete_item(conn, UID, services.create_manual_item(conn, UID, "Deleted thing", 10))  # leaves a gap in ids
 
     # A second, cheaper price check, so the watch has price history to copy.
     cheaper = Product(url=watch.url, ok=True, title="Fastrack Ryz Watch", price=1799, mrp=3499, method="amazon")
@@ -42,7 +54,7 @@ def sqlite_list(tmp_path, monkeypatch):
     conn.close()
     import psycopg                         # only here: Postgres runs only with TEST_DATABASE_URL
     with psycopg.connect(TEST_PG) as pg:
-        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings CASCADE")
+        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings, invites, tokens, users CASCADE")
     return path
 
 
@@ -67,9 +79,9 @@ def test_new_items_after_copy_get_fresh_ids(sqlite_list, monkeypatch):
     copy_to_postgres.copy(sqlite_list, TEST_PG)
     monkeypatch.setenv("DATABASE_URL", TEST_PG)
     conn = db.connect()
-    new_id = services.create_manual_item(conn, "Bottle brush", 170)
+    new_id = services.create_manual_item(conn, UID, "Bottle brush", 170)
     assert new_id == 5                     # 4 ids were used in SQLite (one item was deleted)
-    assert services.summary(conn)["budget"] == 5000
+    assert services.summary(conn, UID)["budget"] == 5000
     conn.close()
 
 
@@ -106,7 +118,7 @@ def test_sql_file_sets_id_counters_and_refuses_a_second_run(sqlite_list, monkeyp
 
     monkeypatch.setenv("DATABASE_URL", TEST_PG)
     conn = db.connect()
-    assert services.create_manual_item(conn, "Bottle brush", 170) == 5     # same as SQLite would give
+    assert services.create_manual_item(conn, UID, "Bottle brush", 170) == 5     # same as SQLite would give
     conn.close()
 
     with pytest.raises(psycopg.errors.RaiseException, match="already has items"):
@@ -120,13 +132,14 @@ def test_sql_file_survives_awkward_names(tmp_path, monkeypatch):
     path = str(tmp_path / "awkward.db")
     conn = db.connect(path)
     db.init(conn)
+    _owner(conn)
     names = ["Levi's 'slim' jeans", "100% cotton tee?", "Kurta 🌸 (pack of 2)", "Line one\nline two"]
     for name in names:
-        services.create_manual_item(conn, name, 499.5, note="it's \"great\"")
+        services.create_manual_item(conn, UID, name, 499.5, note="it's \"great\"")
     conn.close()
     import psycopg
     with psycopg.connect(TEST_PG) as pg:
-        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings CASCADE")
+        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings, invites, tokens, users CASCADE")
 
     script, _ = copy_to_postgres.to_sql(path)
     _run_script(script)

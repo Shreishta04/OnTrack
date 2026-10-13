@@ -8,6 +8,10 @@ them unchanged.
 
 `extract_fn` is passed in rather than imported, so tests can supply a fake
 that never touches the internet.
+
+Every function takes `uid`, the user it acts for, and only ever sees that
+user's rows. Asking for someone else's item answers "not found" (not
+"forbidden"), so nobody can even learn which item numbers exist.
 """
 
 from __future__ import annotations
@@ -61,10 +65,18 @@ def now() -> str:
 
 
 def local_zone() -> ZoneInfo:
-    """Whose calendar "this month" follows. ONTRACK_TIMEZONE takes a name from
-    the time zone database ("Asia/Kolkata", "America/New_York"). One setting
-    for the whole app until accounts give each person their own."""
+    """The default calendar, for anyone without their own time zone.
+    ONTRACK_TIMEZONE takes a name from the time zone database ("Asia/Kolkata",
+    "America/New_York"). Each person's own time zone is in users.timezone."""
     return ZoneInfo(os.getenv("ONTRACK_TIMEZONE", "Asia/Kolkata"))
+
+
+def user_zone(conn, uid: int) -> ZoneInfo:
+    row = conn.execute("SELECT timezone FROM users WHERE id = ?", (uid,)).fetchone()
+    try:
+        return ZoneInfo(row["timezone"]) if row else local_zone()
+    except Exception:
+        return local_zone()
 
 
 def local_month(stamp: str | None, zone: ZoneInfo) -> str | None:
@@ -197,15 +209,13 @@ def _browser_page_wording(p: Product) -> Product:
 
 # ------------------------------------------------------------------ budget
 
-def get_budget(conn: sqlite3.Connection) -> float | None:
-    row = conn.execute("SELECT value FROM settings WHERE key = 'budget'").fetchone()
-    return float(row["value"]) if row else None
+def get_budget(conn: sqlite3.Connection, uid: int) -> float | None:
+    row = conn.execute("SELECT budget FROM users WHERE id = ?", (uid,)).fetchone()
+    return row["budget"] if row else None
 
 
-def set_budget(conn: sqlite3.Connection, amount: float) -> None:
-    conn.execute(
-        "INSERT INTO settings (key, value) VALUES ('budget', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(amount),))
+def set_budget(conn: sqlite3.Connection, uid: int, amount: float) -> None:
+    conn.execute("UPDATE users SET budget = ? WHERE id = ?", (amount, uid))
     conn.commit()
 
 
@@ -232,9 +242,10 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
         # followed. Once a page is read, store its real, cleaned address, so
         # the duplicate check recognises the product when it's shared again.
         real_url = clean_url(p.url)
+        # (Only if this person has no other link with that address already.)
         conn.execute(
-            "UPDATE links SET url = ? WHERE id = ? AND url != ? "
-            "AND NOT EXISTS (SELECT 1 FROM links WHERE url = ?)",
+            "UPDATE links SET url = ? WHERE id = ? AND url != ? AND NOT EXISTS "
+            "(SELECT 1 FROM links AS other WHERE other.url = ? AND other.user_id = links.user_id)",
             (real_url, link_id, real_url, real_url))
     else:
         # Keep the last known price; just note that this attempt failed.
@@ -250,20 +261,21 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
             "AND name LIKE 'http%'", (p.title, link_id))
 
 
-def _known_link(conn: sqlite3.Connection, url: str) -> sqlite3.Row | None:
+def _known_link(conn: sqlite3.Connection, uid: int, url: str) -> sqlite3.Row | None:
     """A link we already have for this URL, or None.
 
     A known link WITH a price is a real duplicate. A known link WITHOUT a
     price is a stuck one (e.g. Amazon showed the server a bot-check), so we
     return it to be filled in instead of refusing.
     """
-    row = conn.execute("SELECT id, item_id, price FROM links WHERE url = ?", (url,)).fetchone()
+    row = conn.execute("SELECT id, item_id, price FROM links WHERE url = ? AND user_id = ?",
+                       (url, uid)).fetchone()
     if row and row["price"] is not None:
         raise Duplicate(row["item_id"],row["id"])
     return row
 
 
-def _fetch_link(conn: sqlite3.Connection, url: str,
+def _fetch_link(conn: sqlite3.Connection, uid: int, url: str,
                 extract_fn: ExtractFn) -> tuple[str, Product, sqlite3.Row | None]:
     """Download and read a store page. Only READS the database, so it never
     holds a write lock while we wait for the store (which can take 20+ s).
@@ -272,17 +284,18 @@ def _fetch_link(conn: sqlite3.Connection, url: str,
     URL already has (None if the link is new).
     """
     cleaned = clean_url(url)
-    stuck = _known_link(conn, cleaned)
+    stuck = _known_link(conn, uid, cleaned)
 
     p = _timed("server", extract_fn)(url)      # the slow part: no write lock held here
     final_url = clean_url(p.url or cleaned)   # e.g. amzn.in short link -> amazon.in/dp/...
-    return final_url, p, stuck or _known_link(conn, final_url)
+    return final_url, p, stuck or _known_link(conn, uid, final_url)
 
 
-def _save_link(conn: sqlite3.Connection, item_id: int, final_url: str, p: Product) -> None:
+def _save_link(conn: sqlite3.Connection, uid: int, item_id: int, final_url: str, p: Product) -> None:
     """Write a link we've already fetched. Fast: milliseconds."""
-    link_id = conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?) RETURNING id",
-                           (item_id, final_url, now())).fetchone()["id"]
+    link_id = conn.execute(
+        "INSERT INTO links (item_id, user_id, url, created_at) VALUES (?, ?, ?, ?) RETURNING id",
+        (item_id, uid, final_url, now())).fetchone()["id"]
     _record_check(conn, link_id, p)
 
 
@@ -293,7 +306,7 @@ def _fill_stuck_link(conn: sqlite3.Connection, stuck: sqlite3.Row, p: Product) -
     return stuck["item_id"]
 
 
-def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
+def create_item_from_link(conn, uid: int, url: str, extract_fn: ExtractFn,
                           name: str | None = None, priority: int = 0) -> int:
     """Paste a link -> new item named after the product.
 
@@ -305,56 +318,58 @@ def create_item_from_link(conn, url: str, extract_fn: ExtractFn,
     Order matters: fetch the page FIRST, then write. Writing first would lock
     the database for the whole download, and every other change would fail.
     """
-    final_url, p, stuck = _fetch_link(conn, url, extract_fn)
+    final_url, p, stuck = _fetch_link(conn, uid, url, extract_fn)
     if stuck:
         item_id = _fill_stuck_link(conn, stuck, p)
         conn.commit()
         return item_id
 
-    item_id = conn.execute("INSERT INTO items (name, priority, created_at) VALUES (?, ?, ?) RETURNING id",
-                        (name or p.title or p.url or url, priority, now())).fetchone()["id"]
+    item_id = conn.execute(
+        "INSERT INTO items (user_id, name, priority, created_at) VALUES (?, ?, ?, ?) RETURNING id",
+        (uid, name or p.title or p.url or url, priority, now())).fetchone()["id"]
     _log_status(conn, item_id, None, "planned")  # initial status
-    _save_link(conn, item_id, final_url, p)
+    _save_link(conn, uid, item_id, final_url, p)
     conn.commit()
     return item_id
 
 
-def add_link(conn, item_id: int, url: str, extract_fn: ExtractFn) -> None:
+def add_link(conn, uid: int, item_id: int, url: str, extract_fn: ExtractFn) -> None:
     """Attach another store's link to an existing item (Amazon + Fastrack for one watch)."""
-    _require_item(conn, item_id)
-    final_url, p, stuck = _fetch_link(conn, url, extract_fn)
+    _require_item(conn, uid, item_id)
+    final_url, p, stuck = _fetch_link(conn, uid, url, extract_fn)
     if stuck and stuck["item_id"] != item_id:
         raise Duplicate(stuck["item_id"],stuck["id"])      # that link belongs to another item
     if stuck:
         _fill_stuck_link(conn, stuck, p)
     else:
-        _save_link(conn, item_id, final_url, p)
+        _save_link(conn, uid, item_id, final_url, p)
     conn.commit()
 
 
-def create_manual_item(conn, name: str, price: float | None, note: str | None = None,
+def create_manual_item(conn, uid: int, name: str, price: float | None, note: str | None = None,
                        priority: int = 0, url: str | None = None) -> int:
     """An item you type in yourself. The optional link is saved WITHOUT
     contacting the store (the point of adding by hand is that the store
     blocked us). It starts with no store price, so Refresh picks it up later,
     and once the store's price arrives it replaces the typed one."""
     link_url = clean_url(url) if url else None
-    if link_url and (known := _known_link(conn, link_url)):
+    if link_url and (known := _known_link(conn, uid, link_url)):
         raise Duplicate(known["item_id"], known["id"])     # already saved, even if still stuck
 
     item_id = conn.execute(
-        "INSERT INTO items (name, manual_price, note, priority, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
-        (name, price, note, priority, now())).fetchone()["id"]
+        "INSERT INTO items (user_id, name, manual_price, note, priority, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        (uid, name, price, note, priority, now())).fetchone()["id"]
     _log_status(conn, item_id, None, "planned")
     if link_url:
-        conn.execute("INSERT INTO links (item_id, url, created_at) VALUES (?, ?, ?)",
-                     (item_id, link_url, now()))
+        conn.execute("INSERT INTO links (item_id, user_id, url, created_at) VALUES (?, ?, ?, ?)",
+                     (item_id, uid, link_url, now()))
     conn.commit()
     return item_id
 
 
-def update_item(conn, item_id: int, **fields) -> None:
-    _require_item(conn, item_id)
+def update_item(conn, uid: int, item_id: int, **fields) -> None:
+    _require_item(conn, uid, item_id)
     old_status = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()["status"]
     allowed = {"name", "status", "priority", "manual_price", "note", "purchased_price"}
     changes = {k: v for k, v in fields.items() if k in allowed}
@@ -363,7 +378,7 @@ def update_item(conn, item_id: int, **fields) -> None:
     if "purchased_price" in changes and (new_status or old_status) != "purchased":
         del changes["purchased_price"]
     if new_status == "purchased" and old_status != "purchased":      # NEW
-        changes.setdefault("purchased_price", item_view(conn, item_id)["price"])
+        changes.setdefault("purchased_price", item_view(conn, uid, item_id)["price"])
         changes["purchased_at"] = now()
     elif old_status == "purchased" and new_status not in (None, "purchased"):  # NEW
         changes["purchased_price"] = None
@@ -377,20 +392,20 @@ def update_item(conn, item_id: int, **fields) -> None:
         conn.commit()
 
 
-def delete_item(conn, item_id: int) -> None:
-    _require_item(conn, item_id)
+def delete_item(conn, uid: int, item_id: int) -> None:
+    _require_item(conn, uid, item_id)
     conn.execute("DELETE FROM items WHERE id = ?", (item_id,))   # links + history cascade
     conn.commit()
 
 
-def delete_link(conn, link_id: int) -> None:
-    if conn.execute("DELETE FROM links WHERE id = ?", (link_id,)).rowcount == 0:
+def delete_link(conn, uid: int, link_id: int) -> None:
+    if conn.execute("DELETE FROM links WHERE id = ? AND user_id = ?", (link_id, uid)).rowcount == 0:
         raise NotFound(f"link {link_id}")
     conn.commit()
 
 
-def _require_item(conn, item_id: int) -> None:
-    if not conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone():
+def _require_item(conn, uid: int, item_id: int) -> None:
+    if not conn.execute("SELECT 1 FROM items WHERE id = ? AND user_id = ?", (item_id, uid)).fetchone():
         raise NotFound(f"item {item_id}")
 
 
@@ -415,8 +430,8 @@ def _link_view(conn, row: sqlite3.Row) -> dict:
     }
 
 
-def item_view(conn, item_id: int) -> dict:
-    row = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+def item_view(conn, uid: int, item_id: int) -> dict:
+    row = conn.execute("SELECT * FROM items WHERE id = ? AND user_id = ?", (item_id, uid)).fetchone()
     if not row:
         raise NotFound(f"item {item_id}")
     links = [_link_view(conn, l) for l in conn.execute(
@@ -444,17 +459,18 @@ def item_view(conn, item_id: int) -> dict:
     }
 
 
-def list_items(conn, status: str | None = None) -> list[dict]:
+def list_items(conn, uid: int, status: str | None = None) -> list[dict]:
     if status:
-        rows = conn.execute("SELECT id FROM items WHERE status = ? ORDER BY priority DESC, id", (status,))
+        rows = conn.execute("SELECT id FROM items WHERE user_id = ? AND status = ? "
+                            "ORDER BY priority DESC, id", (uid, status))
     else:
-        rows = conn.execute("SELECT id FROM items ORDER BY priority DESC, id")
+        rows = conn.execute("SELECT id FROM items WHERE user_id = ? ORDER BY priority DESC, id", (uid,))
     ids = [r["id"] for r in rows]
-    return [item_view(conn, i) for i in ids]
+    return [item_view(conn, uid, i) for i in ids]
 
 
-def price_history(conn, item_id: int) -> list[dict]:
-    _require_item(conn, item_id)
+def price_history(conn, uid: int, item_id: int) -> list[dict]:
+    _require_item(conn, uid, item_id)
     rows = conn.execute(
         """SELECT price_history.link_id, links.url, price_history.price,
                   price_history.mrp, price_history.checked_at
@@ -465,11 +481,11 @@ def price_history(conn, item_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def summary(conn) -> dict:
+def summary(conn, uid: int) -> dict:
     """The numbers at the top of the app."""
-    budget = get_budget(conn)
-    items = list_items(conn)
-    zone = local_zone()
+    budget = get_budget(conn, uid)
+    items = list_items(conn, uid)
+    zone = user_zone(conn, uid)
     month = _utcnow().astimezone(zone).strftime("%Y-%m")      # this month on MY calendar
     spent = sum(i["purchased_price"] or 0 for i in items
                 if i["status"] == "purchased" and local_month(i["purchased_at"], zone) == month)
@@ -513,7 +529,7 @@ def _needs_check(link, force: bool) -> bool:
     phone's list alike, so both follow the same rule."""
     return link["price"] is None or _is_due(link["last_checked"], force)
 
-async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
+async def refresh(conn, uid: int, extract_fn: ExtractFn, force: bool = False,
                   item_id: int | None = None, delay: tuple[float, float] | None = None) -> dict:
     """Re-check prices. Skips links checked within REFRESH_COOLDOWN unless force=True
     (links still without a price are always retried), and links from phone-only
@@ -526,11 +542,12 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
     """
     delay = REFRESH_DELAY if delay is None else delay
     query = ("SELECT links.id, links.url, links.price, links.last_checked FROM links "
-             "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased'")
-    params = ()
+             "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' "
+             "AND items.user_id = ?")
+    params = (uid,)
     if item_id is not None:
-        _require_item(conn, item_id)
-        query, params = query + " AND links.item_id = ?", (item_id,)
+        _require_item(conn, uid, item_id)
+        query, params = query + " AND links.item_id = ?", (uid, item_id)
     links = conn.execute(query, params).fetchall()
     phone_only = [l for l in links if needs_phone(l["url"])]
     links = [l for l in links if not needs_phone(l["url"])]
@@ -558,21 +575,21 @@ async def refresh(conn, extract_fn: ExtractFn, force: bool = False,
     return {"checked": len(due), "skipped_recent": len(links) - len(due),
             "phone_only": len(phone_only), "changed": changes, "failed": failed}
 
-def phone_refresh_list(conn, force: bool = False) -> list[dict]:
+def phone_refresh_list(conn, uid: int, force: bool = False) -> list[dict]:
     """Amazon links the phone should re-download: not bought, and either due for
     a check or still without a price. A link with no price skips the cooldown:
     a failed attempt (e.g. a bot-check page) shouldn't make us wait an hour."""
     rows = conn.execute(
         "SELECT links.id, links.url, links.price, links.last_checked FROM links "
-        "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' ORDER BY links.id"
-    ).fetchall()
+        "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' "
+        "AND items.user_id = ? ORDER BY links.id", (uid,)).fetchall()
     return [{"link_id": r["id"], "url": r["url"]} for r in rows
             if needs_phone(r["url"]) and _needs_check(r, force)]
 
 
-def refresh_link_from_html(conn, link_id: int, html: str) -> dict:
+def refresh_link_from_html(conn, uid: int, link_id: int, html: str) -> dict:
     """Record a price check from a page the phone downloaded for this link."""
-    row = conn.execute("SELECT url, price FROM links WHERE id = ?", (link_id,)).fetchone()
+    row = conn.execute("SELECT url, price FROM links WHERE id = ? AND user_id = ?", (link_id, uid)).fetchone()
     if not row:
         raise NotFound(f"link {link_id}")
     p = extract_from_html(html)(row["url"])           # no fallback: this is the Amazon path

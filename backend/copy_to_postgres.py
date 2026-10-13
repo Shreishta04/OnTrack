@@ -42,18 +42,11 @@ from dotenv import load_dotenv
 import db
 
 # Parents before children: a link needs its item to exist first.
-TABLES = ["settings", "items", "links", "price_history", "status_changes"]
-WITH_IDS = ["items", "links", "price_history", "status_changes"]   # settings has no id
+TABLES = ["users", "tokens", "invites", "settings", "items", "links", "price_history", "status_changes"]
+WITH_IDS = ["users", "tokens", "invites", "items", "links", "price_history", "status_changes"]  # settings has no id
 
 
-def _columns(conn, table: str) -> list[str]:
-    """Column names of a table, in either database."""
-    if isinstance(conn, db.PgConnection):
-        rows = conn.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = ? ORDER BY ordinal_position", (table,)).fetchall()
-        return [r["column_name"] for r in rows]
-    return [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+_columns = db.columns     # an ontrack.db from before Accounts has no users table: [] columns
 
 
 def _sqlite_counters(src) -> dict[str, int]:
@@ -88,6 +81,9 @@ def copy(sqlite_path: str, pg_url: str) -> dict[str, int]:
         for table in TABLES:
             # Only columns both sides have (an old ontrack.db may lack a newer one).
             cols = [c for c in _columns(src, table) if c in _columns(dst, table)]
+            if not cols:                                 # table missing in the old file: nothing to copy
+                copied[table] = 0
+                continue
             names = ", ".join(cols)
             marks = ", ".join("?" for _ in cols)
             rows = src.execute(f"SELECT {names} FROM {table}").fetchall()
@@ -98,6 +94,8 @@ def copy(sqlite_path: str, pg_url: str) -> dict[str, int]:
         # Move each id counter to where SQLite's was (highest copied id as fallback).
         counters = _sqlite_counters(src)
         for table in WITH_IDS:
+            if not copied[table]:
+                continue
             top = dst.execute(f"SELECT COALESCE(MAX(id), 0) AS n FROM {table}").fetchone()["n"]
             last = max(top, counters.get(table, 0))
             if last:                                     # empty table: leave the counter at 1
@@ -143,6 +141,9 @@ def to_sql(sqlite_path: str) -> tuple[str, dict[str, int]]:
         body, copied = [], {}
         for table in TABLES:
             cols = [c for c in _columns(src, table) if c in _columns(fresh, table)]
+            if not cols:
+                copied[table] = 0
+                continue
             rows = src.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()
             for row in rows:
                 values = ", ".join(_literal(v) for v in row)
@@ -151,6 +152,8 @@ def to_sql(sqlite_path: str) -> tuple[str, dict[str, int]]:
 
         counters = _sqlite_counters(src)
         for table in WITH_IDS:
+            if not copied[table]:
+                continue
             top = src.execute(f"SELECT COALESCE(MAX(id), 0) AS n FROM {table}").fetchone()["n"]
             last = max(top, counters.get(table, 0))
             if last:
@@ -169,7 +172,7 @@ def to_sql(sqlite_path: str) -> tuple[str, dict[str, int]]:
 -- Paste all of this into Neon's SQL Editor and press Run.
 -- Everything inside the DO block is saved together or not at all.
 
-{db.PG_SCHEMA.strip()}
+{db.FULL_PG_SCHEMA.strip()}
 
 DO {TAG}
 BEGIN
