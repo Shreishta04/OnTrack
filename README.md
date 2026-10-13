@@ -4,7 +4,7 @@
 
 [![Tests](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml/badge.svg)](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml)
 
-**Status:** 🟢 Live for my own use at **https://on-track-eta.vercel.app** (needs my API key). Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ · Web app ✅ (laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres ✅ · Deployed ✅ (Vercel + Railway + Neon) · Accounts ⏳
+**Status:** 🟢 Live at **https://on-track-eta.vercel.app** (invite-only). Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ · Web app ✅ (laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres ✅ · Deployed ✅ (Vercel + Railway + Neon) · Accounts ✅ (own list, budget, currency and time zone per person)
 
 ---
 
@@ -31,6 +31,15 @@ Before building, I checked existing apps. They fall into two groups that don't o
 Most universal wishlists are also built for US/UK stores, so coverage of Indian shops is patchy. **The gap OnTrack fills:** automatic extraction from Indian stores, combined with a monthly budget.
 
 ## Features
+
+**Accounts**
+- **Invite-only:** I make a one-time invite link in the app (valid 7 days) and send it myself; nobody can sign up without one. The very first account uses the server's `ONTRACK_API_KEY` as its invite, so nobody can grab the owner account after a deploy
+- **Everyone has their own list and budget:** items, links, prices and purchases belong to one person. Asking for someone else's item answers *not found*, for every route
+- **Own currency, country and time zone:** chosen at sign-up (guessed from the device) and changeable in Account. Prices show as `₹1,23,456` in India and `$120.50` in the US; "spent this month" follows each person's own calendar. No currency conversion: prices are shown as the store gave them
+- **The same product on two lists:** duplicate checks are per person, so two people can save the same lipstick, but one person still can't save it twice
+- **A key per device:** each Shortcut and the browser extension gets its own key from **Account → Devices**, shown once and removable if a phone is lost, without touching anything else
+- **Email + password**, hashed with scrypt; a wrong email and a wrong password get the same answer; logins are rate-limited
+- **Forgot the password?** I make a one-time reset link (valid 2 days) in **Account → People**. Using it signs out old logins but keeps device keys, so the Shortcuts don't break. Changing a password signs out every other login
 
 **Saving items**
 - **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet
@@ -85,8 +94,9 @@ Chrome / Edge ──► OnTrack extension                                 │
 React web app (laptop / phone browser) ── JSON ──────────────────┤  HTTP + JSON
                                                                     ▼
                                                  FastAPI backend (Python)
-                                                  ├── main.py       HTTP layer: routes, validation, auth, error → status code
-                                                  ├── services.py   Business rules: lists, budget, cheapest link, refresh
+                                                  ├── main.py       HTTP layer: routes, validation, error → status code
+                                                  ├── auth.py       Accounts: sign-up by invite, logins, device keys, resets
+                                                  ├── services.py   Business rules: lists, budget, cheapest link, refresh (always for one user)
                                                   ├── db.py         Tables and connections (SQLite or Postgres)
                                                   └── extractor.py  Page → name, price, MRP, image
                                                                     │
@@ -100,23 +110,27 @@ The layers are kept separate on purpose. `services.py` doesn't know about HTTP, 
 
 ### Frontend
 
-The web app is a React + TypeScript single page, built with Vite. Each part of the screen is a **component** in its own file (`BudgetCard`, `Tabs`, `ItemRow`, `AddLink`, `SettingsSheet`, …). Two decisions shape it:
+The web app is a React + TypeScript single page, built with Vite. Each part of the screen is a **component** in its own file (`BudgetCard`, `Tabs`, `ItemRow`, `AddLink`, `AuthScreen`, `AccountSheet`, …). Three decisions shape it:
 
 - **The server is the single source of truth.** After any button press the app calls the API and then reloads `/summary`, instead of recalculating budgets in the browser. The backend already computes spent-this-month, what fits and purchase prices (and is tested), so the screen can never drift from the database.
-- **One place talks to the server.** `api.ts` adds the API key, reads the JSON and turns failures into plain sentences ("Can't reach the server…", "The API key was rejected…"). Components only call functions like `getSummary()` or `patchItem()`.
+- **One place talks to the server.** `api.ts` adds this browser's login token, reads the JSON and turns failures into plain sentences ("Can't reach the server…"). Components only call functions like `getSummary()` or `patchItem()`. A `401` anywhere means the login has ended: `api.ts` forgets the token and the app goes back to the sign-in screen, clearing the list from view.
+- **Money follows the person.** `money.tsx` gives every component the user's currency symbol and digit grouping through a React *context* (a value every component can read without passing it down by hand), so `<Price>` shows `₹` or `$` without each component knowing.
 
 ### Data model
 
 ```
-items             a thing I want to buy ("Smartwatch")
-  │                 status: planned / later / purchased, plus purchase price and date
-  ├── links       where it's sold (Amazon ₹1,999 · Fastrack ₹2,499)
-  │     └── price_history   one row per successful price check
-  └── status_changes        one row per move between lists (from → to, when)
-settings          key/value (the monthly budget)
+users             one person: email, password hash, budget, currency, country, time zone, owner or not
+  ├── tokens      a login (web app) or a device key (Shortcut, extension); only a SHA-256 hash is kept
+  ├── invites     one-time sign-up links, and password-reset links (for_user_id set)
+  └── items       a thing I want to buy ("Smartwatch")
+        │           status: planned / later / purchased, plus purchase price and date
+        ├── links   where it's sold (Amazon ₹1,999 · Fastrack ₹2,499); also carries user_id
+        │     └── price_history   one row per successful price check
+        └── status_changes        one row per move between lists (from → to, when)
+settings          key/value; only the budget from before Accounts, read once
 ```
 
-Deleting an item removes its links, price history and status history with it (`ON DELETE CASCADE`).
+Deleting an item removes its links, price history and status history with it (`ON DELETE CASCADE`). Links carry `user_id` as well as their item, so the database itself enforces "unique per person": a unique index on `(user_id, url)`.
 
 ## Tech stack and why
 
@@ -486,9 +500,34 @@ Testing the deployed app turned up three places where OnTrack said one thing and
   ```
   `via` says **who downloaded the page**: `upload` (the phone or the extension) or `server`. When an upload has no price and the server tries itself, both tries are logged, which is exactly the Savana story in two lines. What's deliberately **not** in a log line: the full link (with Accounts, links would show what people shop for; `link=` finds it in the database), the page, request headers, and so never the API key. Web addresses inside error messages (curl likes to repeat the link) become `<link>`. A test makes requests with the right key, a wrong key and a secret-looking product link, and fails if any of them appears in the logs.
 
+### 31. Accounts: one list became many
+
+Before inviting anyone, every item, link and the budget had to belong to someone, and the iPhone Shortcuts and the extension had to keep working on the day it went live. The decisions and the problems, in order:
+
+**1. A cookie wouldn't survive Safari.**
+- *Problem:* the usual way to stay logged in is a cookie, but the web app (Vercel) and the server (Railway) are different sites, and Safari blocks cookies between different sites.
+- *Decision:* logging in gives the browser a **token** that it sends in the same `X-API-Key` header the Shortcuts already use. One mechanism for everything: the Shortcuts and the extension just get their own token (a *device key*). Only a SHA-256 hash of each token is stored, so a database leak doesn't leak working keys. A fast hash is fine there because tokens are 32 random bytes; passwords are different (people pick guessable ones), so they get **scrypt**, which is slow and memory-hungry on purpose.
+
+**2. Who creates the first account?**
+- *Problem:* invite-only needs someone to send the first invite, and an open "first sign-up becomes the owner" would let a stranger grab the account in the minutes after a deploy.
+- *Decision:* the first account's invite code is the server's `ONTRACK_API_KEY`, which only I know. That account becomes the owner and is given everything already in the database (items and links had no owner yet) plus the old budget. The old key also keeps working as the owner, so the Shortcuts and extension didn't break on deploy day; each gets its own device key afterwards.
+
+**3. "Unique link" had to become "unique per person", and SQLite can't drop a rule.**
+- *Symptom (planned for):* `links.url` was `UNIQUE` for the whole table, so a second person couldn't save the same lipstick.
+- *Cause:* Postgres can drop that rule with one `ALTER TABLE`. SQLite can't remove a rule from an existing table at all.
+- *Fix:* `db.migrate()` runs at every start and does nothing if already done. On Postgres it looks the rule up (rather than trusting its usual name, `links_url_key`) and drops it. On SQLite it follows SQLite's own recipe: create the new table, copy the rows **with their ids**, drop the old one, rename the new one, with foreign keys switched off for the moment so dropping the old table doesn't delete the price history. Then a unique index on `(user_id, url)` replaces the old rule. A test builds a database with the **old** tables and data, upgrades it twice, and checks every price check survived, two people can share a link, one person still can't save it twice, and deleting still cascades.
+
+**4. Not giving anything away.**
+- *Someone else's item answers 404, not 403:* "forbidden" would confirm that item 12 exists. Every route that takes an item or link number is tested from a second account.
+- *A wrong email and a wrong password get the same answer and take the same time:* checking a dummy hash when the email doesn't exist stops anyone timing the reply to learn who has an account.
+- *Logins and sign-ups get their own rate limit* (10 a minute per address), on top of the general one.
+
 ### Known limits
 
-- **One time zone, one currency:** "this month" follows one setting (`ONTRACK_TIMEZONE`) and every price is shown in ₹. Each person gets their own time zone and currency with Accounts.
+- **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
+- **The owner key is a master key:** `ONTRACK_API_KEY` still acts as my account. Once every Shortcut and the extension use device keys, it can be changed to a new random value that's only used as the first invite.
+- **Logins don't expire** until you log out, change the password, or a reset is used. Device keys can be removed in Account.
+- **No emails:** invite and reset links are copied and sent by hand. Fine for a handful of people.
 - **Rate limits live in memory:** they reset when the server restarts, and they'd need a shared store if OnTrack ever ran on several servers at once.
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
@@ -499,7 +538,6 @@ Testing the deployed app turned up three places where OnTrack said one thing and
 - **Phone, development mode:** the first load on the phone can take a while, because Vite's dev server sends the app as many small files. A production build doesn't have this.
 - **Postgres isn't tested on my laptop:** Smart App Control blocks it (Challenge 26), so locally the Postgres half of the tests is skipped. GitHub Actions runs it on every push; check the badge at the top before merging.
 - **The first request after a quiet spell is slow:** Railway's Serverless mode puts the server to sleep when nobody uses it (that's why it costs almost nothing). The next request wakes it, which takes a few seconds and can answer one **502**; tapping again works.
-- **One key, one list:** everyone with the API key shares the same list and budget. Fine for me; Accounts fix it before anyone else uses OnTrack.
 - **Some stores block the cloud server:** stores can refuse requests from data centres. Amazon always did (the phone or the extension fetches it instead); since deploying, Savana does too (*error 471*). Flipkart, Littlebox and Fastrack-style stores still work from Railway.
 - **Local development still uses the laptop's IP address:** when I run the server on the laptop for development, the Shortcuts and the phone need the laptop's Wi-Fi address, as before. The deployed setup has one fixed address.
 
@@ -516,8 +554,6 @@ Found while testing the deployed version (12 Oct):
 
 - **Savana is blocked from Railway** (*error 471*, a store-specific code). The phone's page reaches the server, but when it has no price the server tries the page itself as a backup, and that's what gets blocked. Next step: test whether the phone's own page has the price; if it does, Savana becomes phone-only like Amazon.
 - **Tira can't be read yet.** The extension sends the finished page (price included), but OnTrack doesn't know where Tira puts the price. Tira's short links (`trbt.ly`) are redirect pages too. Needs a small Tira reader.
-- **The list stays on screen after a rejected key**; it should clear on a `401` (and stay for network errors), with an "Enter your API key" message.
-- **No way to see the API key** in Settings; planned: a show/hide toggle, hidden by default.
 - **The add box's message never goes away**; it should clear on new input, with a ✕. Rows without a price could have a **Try again** button.
 - **A blocked page is named after its link** (`https://in.savana.com/details/…`); "Savana item" until it fills in would read better.
 - **The extension saves settings without checking them** (a leftover `73` made `on-track-eta.vercel.app73`). It should check the address, ideally by calling `/health`, before saving. On a non-product page, it could say so before saving anything.
@@ -542,7 +578,7 @@ Found while testing the deployed version (12 Oct):
 | Server | Railway (service `OnTrack`, Southeast Asia, Serverless on) | https://ontrack-production-8f1d.up.railway.app |
 | Database | Neon (Postgres, AWS Singapore, free 1 GB, direct connection) | only inside Railway's `DATABASE_URL` |
 
-The server address isn't a secret (the web app has to know it), but every request needs the API key, and the rate limits cap what a stranger could do without it.
+The server address isn't a secret (the web app has to know it), but every request needs a login or device key, and the rate limits cap what a stranger could do without one.
 
 **How it's wired**
 
@@ -560,17 +596,19 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 
 **Vercel settings**
 - Root Directory `frontend`; Vite is detected by itself
-- Environment variable `VITE_API_URL=https://ontrack-production-8f1d.up.railway.app`. **Never `VITE_API_KEY`:** Vite copies `VITE_` values into the files anyone can download. The key is typed once into the app's Settings and stays in that browser.
+- Environment variable `VITE_API_URL=https://ontrack-production-8f1d.up.railway.app`. **Never a key:** Vite copies `VITE_` values into the files anyone can download. Each browser gets its own login token when you log in.
 - `frontend/vercel.json` adds the security headers (Challenge 28)
 
 **Pointing the phone and the extension at it**
-- Safari → the web app → Settings → key → Share → **Add to Home Screen**
-- **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html`
-- **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html`, with the production key in both
-- Extension → sliders: server and app as above, the production key. Chrome asks once for permission to reach the server. Clear each field completely (Ctrl+A) before pasting
+- Safari → the web app → log in → Share → **Add to Home Screen**
+- **Account → Devices → New key** once per device (e.g. "iPhone Shortcuts", "Laptop extension"); each key is shown once
+- **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html`, header `X-API-Key` = the iPhone's device key
+- **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html`, with the device key in both
+- Extension → sliders: server and app as above, the laptop's device key in *API key*. Chrome asks once for permission to reach the server. Clear each field completely (Ctrl+A) before pasting
 
 **Redeploying**
-- **Web app and server:** merging into `main` redeploys both automatically. Vercel builds the frontend; Railway rebuilds the backend.
+- **Web app:** Vercel rebuilds it automatically when I merge into `main`.
+- **Server:** Railway deploys **by hand** (I'm the only one changing code, and a mistaken merge shouldn't go live by itself): Railway → service → Settings → Source → update, then Deployments → wait for the new entry to be **Active** → check `/health`. "Redeploy" on an old entry rebuilds the **old** code. For a change to both (like Accounts), deploy Railway straight after merging, since Vercel goes first.
 - **A setting changed** (Railway variable or Vercel environment variable): Railway applies it with a redeploy (it may ask me to click **Deploy**); on Vercel, redeploy the latest deployment so the new value is baked in.
 - **Is it alive?** `https://ontrack-production-8f1d.up.railway.app/health` → `{"ok":true}`. If something fails, Railway → the service → **Deployments → View logs**.
 - **Reading the logs:** search for `store` to see every store page (`result=ok`, `no-price`, `blocked`, `network` or `refused`, with the reason), or for `link=21` to follow one product. `via=upload` means the phone or the extension downloaded the page; `via=server` means the server did.
@@ -610,20 +648,21 @@ On a laptop without Postgres, `pytest` says something like *49 passed, 37 skippe
 
 ### Settings
 
-All optional except the API key; put them in `backend/.env` locally or in the host's settings when deployed.
+All optional except `ONTRACK_API_KEY`; put them in `backend/.env` locally or in the host's settings when deployed. Nothing new is needed for Accounts.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `ONTRACK_API_KEY` | (required) | The secret every request must send in `X-API-Key` |
+| `ONTRACK_API_KEY` | (required) | The owner key: the invite code for the first account, and it acts as the owner's account in `X-API-Key` |
 | `ONTRACK_CORS_ORIGINS` | `http://localhost:5173` | Web addresses allowed to call the API from a browser (comma-separated; never `*`) |
 | `DATABASE_URL` | unset (SQLite) | Postgres address; see below |
 | `ONTRACK_DB` | `ontrack.db` | SQLite file, when `DATABASE_URL` isn't set |
-| `ONTRACK_TIMEZONE` | `Asia/Kolkata` | Whose calendar "spent this month" follows |
+| `ONTRACK_TIMEZONE` | `Asia/Kolkata` | Fallback calendar for "spent this month" (each person has their own time zone) |
 | `ONTRACK_MAX_UPLOAD_MB` | `5` | Largest upload accepted (413 above it) |
 | `ONTRACK_RATE_LIMIT` | `60` | Requests per minute from one address (429 above it) |
 | `ONTRACK_RATE_LIMIT_HEAVY` | `10` | Per minute for requests that download store pages |
 | `ONTRACK_RATE_LIMIT_HEAVY_TOTAL` | `30` | Page downloads per minute from **all** addresses together |
 | `ONTRACK_RATE_LIMIT_UPLOADS` | `30` | Refresh uploads (`/links/{id}/from-html`) per minute |
+| `ONTRACK_RATE_LIMIT_LOGIN` | `10` | Log-in, sign-up and reset attempts per minute from one address |
 | `ONTRACK_TRUST_PROXY` | `off` | `on` behind Railway's proxy: the real address is the **last** `X-Forwarded-For` entry |
 | `ONTRACK_DOCS` | `on` | `off` on the deployed server hides `/docs` |
 
@@ -663,16 +702,15 @@ Create `frontend/.env.local` (git-ignored) so the app knows where the server is 
 
 ```
 VITE_API_URL=http://127.0.0.1:8000
-VITE_API_KEY=<the same key as backend/.env>
 ```
 
-Then, with the backend running:
+(An old `VITE_API_KEY` line can be deleted: the app doesn't read it any more.) Then, with the backend running:
 
 ```powershell
 npm run dev
 ```
 
-Open **http://localhost:5173** (`localhost`, not `127.0.0.1`, because CORS only allows `localhost`). `.env.local` is for development only: Vite copies its values into the built app, so a real deployment must not contain the key there. The app's Settings panel stores the key and server address in the browser instead.
+Open **http://localhost:5173** (`localhost`, not `127.0.0.1`, because CORS only allows `localhost`). The first time on a database without accounts, tap **Have an invite? Create your account** and use `ONTRACK_API_KEY` from `backend/.env` as the invite code: that account becomes the owner and gets everything already saved. After that, log in with email and password.
 
 Try the extractor on its own:
 ```powershell
@@ -729,17 +767,26 @@ On the laptop, an Amazon price can also be refreshed with the browser extension:
 
 1. Open `chrome://extensions` (or `edge://extensions`), turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder.
 2. Pin it: the puzzle-piece icon in the toolbar → 📌 next to OnTrack.
-3. Click the OnTrack icon. The first time, it asks for the **server** (`http://localhost:8000`), the **API key** (from `backend/.env`) and the **app address** (`http://localhost:5173`). The sliders button changes them later.
+3. Click the OnTrack icon. The first time, it asks for the **server** (`http://localhost:8000`), the **API key** (a device key from the web app's **Account → Devices → New key**) and the **app address** (`http://localhost:5173`). The sliders button changes them later.
 4. On a product page: **Add to OnTrack**. On a product already saved: **Update price**.
 
 After editing any file in `extension/`, click ↻ on its card in `chrome://extensions`.
 
 ## API overview
 
-All endpoints except `/health` require the `X-API-Key` header. Besides the usual codes, the server can answer **400** (a link to a private or internal address), **413** (upload over the size limit) and **429** (too many requests; `Retry-After` says how long to wait).
+All endpoints except `/health` and `/auth/signup|login|reset` need a login token or device key in the `X-API-Key` header (missing or wrong: **401**). Everything acts on that person's own list. Besides the usual codes, the server can answer **400** (a link to a private or internal address, a used invite, a weak password), **403** (owner-only), **413** (upload over the size limit) and **429** (too many requests; `Retry-After` says how long to wait).
 
 | Method | Endpoint | Purpose |
 |---|---|---|
+| `POST` | `/auth/signup` | Create an account: `invite`, `email`, `password` (10+), `name`, `currency`, `country`, `timezone`. Answers `{user, token}` |
+| `POST` | `/auth/login` · `/auth/reset` | Log in with email + password, or set a new password with a reset `code`. Answers `{user, token}` |
+| `POST` | `/auth/logout` | End this login |
+| `GET` · `PATCH` | `/me` | Your profile; change name, currency, country, time zone |
+| `POST` | `/me/password` | Change password (`current`, `new`); other logins are signed out |
+| `GET` · `POST` · `DELETE` | `/tokens` · `/tokens/{id}` | Your logins and device keys; make a device key (shown once); remove one |
+| `GET` · `POST` · `DELETE` | `/invites` · `/invites/{id}` | Owner: list, make (7 days, one use) or cancel invites |
+| `GET` | `/users` | Owner: everyone with an account |
+| `POST` | `/users/{id}/reset` | Owner: a one-time password-reset code (2 days) |
 | `GET` | `/summary` | Budget, discounted total, spent this month, remaining, savings vs MRP, what fits, all items |
 | `PUT` | `/budget` | Set the monthly budget |
 | `GET` | `/items?status=` | List items: `planned`, `later`, `purchased` or `all` (default) |
@@ -764,22 +811,25 @@ OnTrack/
 │   └── tests.yml          GitHub Actions: tests on SQLite + Postgres, frontend build + lint
 ├── backend/
 │   ├── main.py            FastAPI routes
+│   ├── auth.py            accounts: invites, passwords, tokens, resets
 │   ├── services.py        business logic
-│   ├── db.py              schema; SQLite or Postgres (DATABASE_URL)
+│   ├── db.py              schema and upgrades of old databases; SQLite or Postgres (DATABASE_URL)
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 131, half of them run on SQLite and Postgres
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 171, most run on SQLite and Postgres
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
     ├── index.html             the single HTML page (fonts, theme colour)
-    ├── .env.local             dev server address + key (git-ignored)
+    ├── .env.local             dev server address (git-ignored)
     ├── vercel.json            security headers for the deployed web app
     └── src/
         ├── main.tsx           entry point: draws <App /> into the page
-        ├── App.tsx            loads /summary, owns the tab, handles button presses
-        ├── api.ts             every request to the backend
+        ├── App.tsx            sign-in screen or the list; loads /summary, owns the tab, handles button presses
+        ├── api.ts             every request to the backend, with this browser's login token
+        ├── money.tsx          the person's currency symbol and digit grouping, for every <Price>
+        ├── places.ts          countries, currencies, time zones; first guesses from the device
         ├── types.ts           shapes of the data the backend sends
         ├── format.ts          store names, short dates, plain-words errors and tips
         ├── index.css          design tokens (light + dark), layout, components
@@ -787,14 +837,15 @@ OnTrack/
         │   └── useTheme.ts    light / dark / follow the device
         └── components/
             ├── BudgetCard.tsx     budget, bar, totals, in-card budget editing
-            ├── Price.tsx          every ₹ amount, drawn the same way
+            ├── Price.tsx          every amount, drawn the same way, in the person's currency
             ├── AddLink.tsx        paste-a-link box
             ├── AddByHand.tsx      name, optional link, price
             ├── Tabs.tsx           Wish list · Later · Bought · All
             ├── ItemList.tsx       the rows for the current tab
             ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
             ├── Thumb.tsx          product photo or a letter
-            ├── SettingsSheet.tsx  API key and server address
+            ├── AuthScreen.tsx     log in, sign up with an invite, new password from a reset link
+            ├── AccountSheet.tsx   profile, device keys, people and invites (owner), password, log out
             └── Icons.tsx          refresh, moon, sun, sliders, close
 └── extension/                 Chrome / Edge extension (plain JavaScript, no build step)
     ├── manifest.json          name, permissions (current tab only, on click), icons
@@ -832,14 +883,16 @@ OnTrack/
 - [x] Deploy: web app on Vercel, backend on Railway (trial, then free plan with $1 of credit a month), database on Neon; point the Shortcuts and the extension at it
 - [x] Test the deployed version: phone on mobile data with the laptop off, laptop browser, extension, security spot checks
 - [x] Live fixes: ↻ retries items without a price, a clearer "no price" reason for pages from the phone or extension, one log line per store page (no links, never the key)
-- [ ] UI fixes found while testing it: key show/hide, clear the list on a rejected key, add-box message, Try again on stuck rows, extension checks its settings
+- [ ] UI fixes found while testing it: add-box message, Try again on stuck rows, extension checks its settings (clearing the list on a rejected login came with Accounts; the key is no longer typed into the web app)
 - [ ] Savana on the deployed version (blocked from Railway; parked for now)
 - [ ] Tira support (tirabeauty.com and `trbt.ly` links)
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [ ] Rethink "Over budget" (each item on its own, or in priority order?)
 - [ ] Flipkart MRP (the struck-through price)
-- [ ] Accounts, so several people can use one deployed OnTrack (each with their own list and budget)
+- [x] Accounts: invite-only sign-up, email + password, own list and budget, device keys for the Shortcuts and extension, reset links, my existing list moved into my account
+- [x] Per-person currency, country and time zone
+- [ ] Warn when a store's currency isn't the person's (no conversion yet)
 
 - [ ] Budget periods: choose weekly, monthly or yearly; see past periods with their budget and what I spent
 
@@ -913,3 +966,11 @@ OnTrack/
 - Laptop: the extension adds, updates prices and removes non-product pages on the live server; same list as the phone; the Alexa link is clean in Neon; the SSRF block refuses `169.254.169.254`; Railway usage half a cent
 - Found: Savana blocks Railway (error 471), Tira's price isn't read, ↻ waits an hour on items without a price, and a list of small UI fixes (see *Found while using it*)
 - `feature/live-fixes`: ↻ now retries items without a price instead of waiting an hour; pages from the phone or extension no longer blame JavaScript; every store page gets one log line (store, who downloaded it, result, reason, time), with a test that the key and full links never appear (Challenge 30). Savana parked. 131 tests
+
+**2026-10-13**
+- `feature/accounts`: invite-only accounts with email + password (scrypt). Logins and device keys are tokens in the same `X-API-Key` header (Safari blocks cookies between Vercel and Railway), stored only as hashes. The first account uses `ONTRACK_API_KEY` as its invite and is given the existing list and budget; the old key keeps working as the owner until the Shortcuts have device keys
+- Every query in `services.py` now takes the user; someone else's item answers 404 on every route. Duplicate links are per person (a unique index on `user_id` + `url`); old databases are upgraded at start-up, with SQLite's table-rebuild recipe since it can't drop a rule
+- Per-person currency, country and time zone: guessed from the device at sign-up, changeable in Account; prices show `₹1,23,456` or `$120.50`, and "this month" follows each person's calendar
+- Web app: a sign-in screen (log in, sign up from an invite link, new password from a reset link) and an Account sheet (profile, device keys, people and invites, password, log out), in the same linen-and-cocoa design. A rejected login now clears the list and returns to sign-in
+- 40 new tests (all fail on the old code), 171 in total on SQLite and Postgres 16; ran the whole flow in headless Chromium: owner sign-up, device key, invite, a US friend's own dollar list in dark mode
+

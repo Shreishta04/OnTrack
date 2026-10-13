@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import secrets
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -24,6 +23,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 import socket
 
+import auth
 import db
 import services
 from extractor import UnsafeURL, check_public_url
@@ -134,6 +134,10 @@ RATE_LIMIT_HEAVY_TOTAL = int(os.getenv("ONTRACK_RATE_LIMIT_HEAVY_TOTAL", "30"))
 # Pages the phone uploads for Refresh: no download, but each 5 MB page takes
 # seconds of CPU to read, so they get their own limit (a 15-item refresh fits).
 RATE_LIMIT_UPLOADS = int(os.getenv("ONTRACK_RATE_LIMIT_UPLOADS", "30"))
+# Logging in and signing up: a low limit, so nobody can try thousands of
+# passwords. Each try also costs the server a slow password hash.
+RATE_LIMIT_LOGIN = int(os.getenv("ONTRACK_RATE_LIMIT_LOGIN", "10"))
+LOGIN_REQUESTS = re.compile(r"^POST /auth/(login|signup|reset)$")
 HEAVY_REQUESTS = re.compile(r"^POST (/items/from-link|/items/from-html|/items/\d+/links"
                             r"|/refresh|/items/\d+/refresh)$")
 UPLOAD_REQUESTS = re.compile(r"^POST /links/\d+/from-html$")
@@ -201,6 +205,8 @@ class LimitRequestRate:
         if not wait and HEAVY_REQUESTS.match(request):
             wait = (self.limiter.allow(who, "heavy", RATE_LIMIT_HEAVY)
                     or self.limiter.allow("everyone", "heavy", RATE_LIMIT_HEAVY_TOTAL))
+        if not wait and LOGIN_REQUESTS.match(request):
+            wait = self.limiter.allow(who, "login", RATE_LIMIT_LOGIN)
         if not wait and UPLOAD_REQUESTS.match(request):
             wait = self.limiter.allow(who, "uploads", RATE_LIMIT_UPLOADS)
         if wait:
@@ -274,11 +280,12 @@ def refuse_unsafe(url: str, resolve) -> None:
         pass        # can't look the name up right now: the download will say so
 
 
-def require_key(x_api_key: str = Header(..., description="Your ONTRACK_API_KEY")):
-    # compare_digest takes the same time whether the first or last character is
-    # wrong, so an attacker can't guess the key one character at a time by timing.
-    if not secrets.compare_digest(x_api_key, os.environ["ONTRACK_API_KEY"]):
-        raise HTTPException(status_code=401, detail="Invalid API key")
+def current_user(x_api_key: str | None = Header(None, description="Your login or device token"),
+                 conn=Depends(get_db)) -> dict:
+    """Who is asking. Every route that touches a list depends on this, so a
+    request without a valid token never reaches the database queries.
+    (FastAPI gives this and the route the same connection: one per request.)"""
+    return auth.user_for_token(conn, x_api_key)
 
 
 # ------------------------------------------------------- errors -> HTTP codes
@@ -286,6 +293,21 @@ def require_key(x_api_key: str = Header(..., description="Your ONTRACK_API_KEY")
 @app.exception_handler(NotFound)
 async def not_found(_: Request, exc: NotFound):
     return JSONResponse(status_code=404, content={"detail": f"Not found: {exc}"})
+
+
+@app.exception_handler(auth.AuthError)
+async def auth_error(_: Request, exc: auth.AuthError):
+    return JSONResponse(status_code=401, content={"detail": str(exc)})
+
+
+@app.exception_handler(auth.Forbidden)
+async def forbidden(_: Request, exc: auth.Forbidden):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(auth.BadRequest)
+async def bad_request(_: Request, exc: auth.BadRequest):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(Duplicate)
@@ -332,6 +354,48 @@ class LinkIn(BaseModel):
     url: HttpUrl
 
 
+# Account bodies. The real checks (email shape, password length, a real time
+# zone) are in auth.py, so they also apply outside HTTP; these only cap sizes.
+class SignupIn(BaseModel):
+    invite: str = Field(..., min_length=1, max_length=200)
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., max_length=auth.PASSWORD_MAX)
+    name: str = Field("", max_length=80)
+    currency: str = Field("INR", max_length=3)
+    country: str = Field("IN", max_length=2)
+    timezone: str = Field("Asia/Kolkata", max_length=64)
+
+
+class LoginIn(BaseModel):
+    email: str = Field(..., max_length=254)
+    password: str = Field(..., max_length=auth.PASSWORD_MAX)
+
+
+class ResetIn(BaseModel):
+    code: str = Field(..., min_length=1, max_length=200)
+    password: str = Field(..., max_length=auth.PASSWORD_MAX)
+
+
+class PasswordIn(BaseModel):
+    current: str = Field(..., max_length=auth.PASSWORD_MAX)
+    new: str = Field(..., max_length=auth.PASSWORD_MAX)
+
+
+class ProfilePatch(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    currency: str | None = Field(None, max_length=3)
+    country: str | None = Field(None, max_length=2)
+    timezone: str | None = Field(None, max_length=64)
+
+
+class TokenIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=60, examples=["iPhone Shortcuts"])
+
+
+class InviteIn(BaseModel):
+    note: str | None = Field(None, max_length=80, examples=["Priya"])
+
+
 class ItemPatch(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=NAME_MAX)
     status: Literal["planned", "later", "purchased"] | None = None
@@ -343,133 +407,214 @@ class ItemPatch(BaseModel):
 
 # ------------------------------------------------------------------- routes
 
-auth = [Depends(require_key)]
-
-
 @app.get("/health")
 def health():
     """Unauthenticated ping, handy for checking the server is up."""
     return {"ok": True}
 
 
-@app.get("/summary", dependencies=auth)
-def get_summary(conn=Depends(get_db)):
+# ------------------------------------------------------------- accounts
+
+@app.post("/auth/signup", status_code=201)
+def post_signup(body: SignupIn, conn=Depends(get_db)):
+    """Create an account with an invite code. Answers with a login token."""
+    user, token = auth.signup(conn, body.invite, body.email, body.password, body.name,
+                              body.currency.upper(), body.country.upper(), body.timezone)
+    return {"user": user, "token": token}
+
+
+@app.post("/auth/login")
+def post_login(body: LoginIn, conn=Depends(get_db)):
+    user, token = auth.login(conn, body.email, body.password)
+    return {"user": user, "token": token}
+
+
+@app.post("/auth/reset")
+def post_reset(body: ResetIn, conn=Depends(get_db)):
+    """Use a password-reset link from the owner."""
+    user, token = auth.reset_password(conn, body.code, body.password)
+    return {"user": user, "token": token}
+
+
+@app.post("/auth/logout", status_code=204)
+def post_logout(user=Depends(current_user), conn=Depends(get_db)):
+    auth.logout(conn, user)
+
+
+@app.get("/me")
+def get_me(user=Depends(current_user)):
+    return auth.public_user(user)
+
+
+@app.patch("/me")
+def patch_me(body: ProfilePatch, user=Depends(current_user), conn=Depends(get_db)):
+    fields = body.model_dump(exclude_unset=True)
+    for k in ("currency", "country"):
+        if fields.get(k):
+            fields[k] = fields[k].upper()
+    return auth.update_profile(conn, user, **fields)
+
+
+@app.post("/me/password", status_code=204)
+def post_password(body: PasswordIn, user=Depends(current_user), conn=Depends(get_db)):
+    auth.change_password(conn, user, body.current, body.new)
+
+
+@app.get("/tokens")
+def get_tokens(user=Depends(current_user), conn=Depends(get_db)):
+    """Your logins and devices (never the tokens themselves: only their hashes are kept)."""
+    return auth.list_tokens(conn, user)
+
+
+@app.post("/tokens", status_code=201)
+def post_token(body: TokenIn, user=Depends(current_user), conn=Depends(get_db)):
+    """A new key for a Shortcut or the extension. Shown once."""
+    return auth.create_device_token(conn, user, body.name)
+
+
+@app.delete("/tokens/{token_id}", status_code=204)
+def remove_token(token_id: int, user=Depends(current_user), conn=Depends(get_db)):
+    auth.revoke_token(conn, user, token_id)
+
+
+@app.get("/invites")
+def get_invites(user=Depends(current_user), conn=Depends(get_db)):
+    return auth.list_invites(conn, user)
+
+
+@app.post("/invites", status_code=201)
+def post_invite(body: InviteIn, user=Depends(current_user), conn=Depends(get_db)):
+    """A one-time sign-up code, valid for 7 days (owner only)."""
+    return auth.create_invite(conn, user, body.note)
+
+
+@app.delete("/invites/{invite_id}", status_code=204)
+def remove_invite(invite_id: int, user=Depends(current_user), conn=Depends(get_db)):
+    auth.delete_invite(conn, user, invite_id)
+
+
+@app.get("/users")
+def get_users(user=Depends(current_user), conn=Depends(get_db)):
+    """Everyone with an account (owner only)."""
+    return auth.list_users(conn, user)
+
+
+@app.post("/users/{user_id}/reset", status_code=201)
+def post_user_reset(user_id: int, user=Depends(current_user), conn=Depends(get_db)):
+    """A one-time password-reset code for someone who forgot theirs, valid 2 days (owner only)."""
+    return auth.create_invite(conn, user, "Password reset", for_user_id=user_id)
+
+
+@app.get("/summary")
+def get_summary(conn=Depends(get_db), user=Depends(current_user)):
     """Budget, discounted total of planned items, what's left, and every item."""
-    return services.summary(conn)
+    return services.summary(conn, user["id"])
 
 
-@app.put("/budget", dependencies=auth)
-def put_budget(body: BudgetIn, conn=Depends(get_db)):
-    services.set_budget(conn, body.amount)
+@app.put("/budget")
+def put_budget(body: BudgetIn, conn=Depends(get_db), user=Depends(current_user)):
+    services.set_budget(conn, user["id"], body.amount)
     return {"budget": body.amount}
 
 
-@app.get("/items", dependencies=auth)
-def get_items(status: Literal["planned", "later", "purchased", "all"] = "all", conn=Depends(get_db)):
-    return services.list_items(conn, None if status == "all" else status)
+@app.get("/items")
+def get_items(status: Literal["planned", "later", "purchased", "all"] = "all", conn=Depends(get_db), user=Depends(current_user)):
+    return services.list_items(conn, user["id"], None if status == "all" else status)
 
 
-@app.get("/items/{item_id}/history", dependencies=auth)
-def get_item_history(item_id: int, conn=Depends(get_db)):
+@app.get("/items/{item_id}/history")
+def get_item_history(item_id: int, conn=Depends(get_db), user=Depends(current_user)):
     """Every price check for this item's links, oldest first."""
-    return services.price_history(conn, item_id)
+    return services.price_history(conn, user["id"], item_id)
 
 
-@app.post("/items/from-link", status_code=201, dependencies=auth)
-def post_from_link(body: FromLinkIn, conn=Depends(get_db), extract=Depends(get_extract),
+@app.post("/items/from-link", status_code=201)
+def post_from_link(body: FromLinkIn, conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract),
                    resolve=Depends(get_resolver)):
     """Paste a product link. The item is created even if the price can't be read."""
     refuse_unsafe(str(body.url), resolve)
-    item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
-    return services.item_view(conn, item_id)
+    item_id = services.create_item_from_link(conn, user["id"], str(body.url), extract, body.name, body.priority)
+    return services.item_view(conn, user["id"], item_id)
 
 
-# @app.post("/items/from-html", status_code=201, dependencies=auth)
-# def post_from_html(body: FromHtmlIn, conn=Depends(get_db)):
-#     """The phone fetched the page itself and sends it here; the server never contacts the store."""
-#     print("from-html:", len(body.html), "chars | starts:", body.html[:80].replace("\n", " "))   # TEMP debug
-#     extract = services.extract_from_html(body.html)
-#     item_id = services.create_item_from_link(conn, str(body.url), extract, body.name, body.priority)
-#     return services.item_view(conn, item_id)
-
-@app.post("/items/from-html", status_code=201, dependencies=auth)
+@app.post("/items/from-html", status_code=201)
 def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
                    name: str | None = Form(None, max_length=NAME_MAX), priority: int = Form(0),
-                   conn=Depends(get_db), extract=Depends(get_extract)):
+                   conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract)):
     """The phone fetched the page and uploads it here. Non-Amazon pages fall back to a server fetch."""
     page = html.file.read().decode("utf-8", errors="replace")
     if not page.strip():
         raise HTTPException(status_code=422, detail="The uploaded page is empty")
     extract_fn = services.extract_from_html(page, fallback=extract)
-    item_id = services.create_item_from_link(conn, str(url), extract_fn, name, priority)
-    return services.item_view(conn, item_id)
+    item_id = services.create_item_from_link(conn, user["id"], str(url), extract_fn, name, priority)
+    return services.item_view(conn, user["id"], item_id)
 
 
-@app.post("/items", status_code=201, dependencies=auth)
-def post_manual(body: ManualItemIn, conn=Depends(get_db), resolve=Depends(get_resolver)):
+@app.post("/items", status_code=201)
+def post_manual(body: ManualItemIn, conn=Depends(get_db), user=Depends(current_user), resolve=Depends(get_resolver)):
     """An item you type in yourself: a name, a price, and optionally a store link."""
     if body.url:
         refuse_unsafe(str(body.url), resolve)
-    item_id = services.create_manual_item(conn, body.name, body.price, body.note, body.priority,
+    item_id = services.create_manual_item(conn, user["id"], body.name, body.price, body.note, body.priority,
                                           str(body.url) if body.url else None)
-    return services.item_view(conn, item_id)
+    return services.item_view(conn, user["id"], item_id)
 
 
-@app.get("/items/{item_id}", dependencies=auth)
-def get_item(item_id: int, conn=Depends(get_db)):
-    return services.item_view(conn, item_id)
+@app.get("/items/{item_id}")
+def get_item(item_id: int, conn=Depends(get_db), user=Depends(current_user)):
+    return services.item_view(conn, user["id"], item_id)
 
 
-@app.patch("/items/{item_id}", dependencies=auth)
-def patch_item(item_id: int, body: ItemPatch, conn=Depends(get_db)):
+@app.patch("/items/{item_id}")
+def patch_item(item_id: int, body: ItemPatch, conn=Depends(get_db), user=Depends(current_user)):
     # exclude_unset: only change fields the request actually included,
     # so sending {"planned": false} doesn't wipe the name.
-    services.update_item(conn, item_id, **body.model_dump(exclude_unset=True))
-    return services.item_view(conn, item_id)
+    services.update_item(conn, user["id"], item_id, **body.model_dump(exclude_unset=True))
+    return services.item_view(conn, user["id"], item_id)
 
 
-@app.delete("/items/{item_id}", status_code=204, dependencies=auth)
-def remove_item(item_id: int, conn=Depends(get_db)):
-    services.delete_item(conn, item_id)
+@app.delete("/items/{item_id}", status_code=204)
+def remove_item(item_id: int, conn=Depends(get_db), user=Depends(current_user)):
+    services.delete_item(conn, user["id"], item_id)
 
 
-@app.post("/items/{item_id}/links", status_code=201, dependencies=auth)
-def post_link(item_id: int, body: LinkIn, conn=Depends(get_db), extract=Depends(get_extract),
+@app.post("/items/{item_id}/links", status_code=201)
+def post_link(item_id: int, body: LinkIn, conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract),
               resolve=Depends(get_resolver)):
     """Add another store's link to an item; the cheapest one counts."""
     refuse_unsafe(str(body.url), resolve)
-    services.add_link(conn, item_id, str(body.url), extract)
-    return services.item_view(conn, item_id)
+    services.add_link(conn, user["id"], item_id, str(body.url), extract)
+    return services.item_view(conn, user["id"], item_id)
 
 
-@app.delete("/links/{link_id}", status_code=204, dependencies=auth)
-def remove_link(link_id: int, conn=Depends(get_db)):
-    services.delete_link(conn, link_id)
+@app.delete("/links/{link_id}", status_code=204)
+def remove_link(link_id: int, conn=Depends(get_db), user=Depends(current_user)):
+    services.delete_link(conn, user["id"], link_id)
 
 
-@app.post("/refresh", dependencies=auth)
-async def post_refresh(force: bool = False, conn=Depends(get_db), extract=Depends(get_extract)):
+@app.post("/refresh")
+async def post_refresh(force: bool = False, conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract)):
     """Re-check prices of links not checked in the last hour (all of them with ?force=true)."""
-    return await services.refresh(conn, extract, force=force)
+    return await services.refresh(conn, user["id"], extract, force=force)
 
 
-@app.post("/items/{item_id}/refresh", dependencies=auth)
+@app.post("/items/{item_id}/refresh")
 async def post_item_refresh(item_id: int, force: bool = True,
-                            conn=Depends(get_db), extract=Depends(get_extract)):
+                            conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract)):
     """Re-check one item's links. Forced by default: you asked for this one specifically."""
-    result = await services.refresh(conn, extract, force=force, item_id=item_id)
-    return {**result, "item": services.item_view(conn, item_id)}
+    result = await services.refresh(conn, user["id"], extract, force=force, item_id=item_id)
+    return {**result, "item": services.item_view(conn, user["id"], item_id)}
 
-@app.get("/refresh/phone-list", dependencies=auth)
-def get_phone_refresh_list(force: bool = False, conn=Depends(get_db)):
+@app.get("/refresh/phone-list")
+def get_phone_refresh_list(force: bool = False, conn=Depends(get_db), user=Depends(current_user)):
     """Amazon links the phone should download and upload back (bought items and recent checks skipped)."""
-    return services.phone_refresh_list(conn, force)
+    return services.phone_refresh_list(conn, user["id"], force)
 
 
-@app.post("/links/{link_id}/from-html", dependencies=auth)
-def post_link_from_html(link_id: int, html: UploadFile = File(...), conn=Depends(get_db)):
+@app.post("/links/{link_id}/from-html")
+def post_link_from_html(link_id: int, html: UploadFile = File(...), conn=Depends(get_db), user=Depends(current_user)):
     """Upload a freshly downloaded page for one link; records the new price."""
     page = html.file.read().decode("utf-8", errors="replace")
     if not page.strip():
         raise HTTPException(status_code=422, detail="The uploaded page is empty")
-    return services.refresh_link_from_html(conn, link_id, page)
+    return services.refresh_link_from_html(conn, user["id"], link_id, page)

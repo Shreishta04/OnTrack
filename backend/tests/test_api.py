@@ -11,13 +11,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 import sqlite3
+import auth
 import db
 import main
 import services
 from extractor import Product, clean_url
 
-KEY = "test-key-long-enough-for-the-startup-check"
-H = {"X-API-Key": KEY}
+KEY = "test-key-long-enough-for-the-startup-check"   # the owner key (ONTRACK_API_KEY)
+# The owner's login token. The `client` fixture signs the owner up and puts the
+# token in here, so every test below acts as a real, logged-in user.
+H = {"X-API-Key": ""}
+OWNER = {"email": "shane@example.com", "password": "correct horse battery", "name": "Shane"}
 
 # Fake store catalogue: url -> what the extractor "finds" there.
 CATALOGUE = {
@@ -50,7 +54,8 @@ def _wipe_postgres(url):
     """Start each Postgres test from empty tables, like a fresh SQLite file."""
     import psycopg
     with psycopg.connect(url) as conn:
-        conn.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings CASCADE")
+        conn.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings, "
+                     "invites, tokens, users CASCADE")
 
 
 @pytest.fixture(params=["sqlite", "postgres"])
@@ -65,6 +70,7 @@ def client(request, tmp_path, monkeypatch):
         monkeypatch.delenv("DATABASE_URL", raising=False)   # even if .env sets one
         monkeypatch.setenv("ONTRACK_DB", str(tmp_path / "test.db"))
     monkeypatch.setattr(services, "REFRESH_DELAY", (0, 0))
+    monkeypatch.setattr(auth, "SCRYPT_N", 2 ** 10)    # a quick password hash: tests don't need a slow one
     catalogue = dict(CATALOGUE)
 
     def fake_extract(url):
@@ -79,12 +85,16 @@ def client(request, tmp_path, monkeypatch):
     with TestClient(main.app) as c:          # `with` runs startup (creates tables)
         c.catalogue = catalogue              # tests can change "store prices"
         c.backend = request.param            # "sqlite" or "postgres"
+        r = c.post("/auth/signup", json={"invite": KEY, **OWNER})
+        assert r.status_code == 201, r.text
+        H["X-API-Key"] = r.json()["token"]
+        main.rate_limiter.reset()            # signing up shouldn't count towards a test's limits
         yield c
     main.app.dependency_overrides.clear()
 
 
 def test_requires_api_key(client):
-    assert client.get("/summary").status_code == 422                      # header missing
+    assert client.get("/summary").status_code == 401                      # header missing: "Log in first"
     assert client.get("/summary", headers={"X-API-Key": "wrong"}).status_code == 401
     assert client.get("/health").status_code == 200                       # public
 
@@ -761,7 +771,7 @@ def test_spent_this_month_follows_india_time_not_utc(client, monkeypatch):
     at("2026-11-05T06:00:00+00:00")                       # looking at the app on 5 Nov
     assert client.get("/summary", headers=H).json()["spent_this_month"] == 700
 
-    monkeypatch.setenv("ONTRACK_TIMEZONE", "UTC")         # the old behaviour, for contrast
+    client.patch("/me", json={"timezone": "UTC"}, headers=H)   # the old behaviour, for contrast
     assert client.get("/summary", headers=H).json()["spent_this_month"] == 0
 
 
