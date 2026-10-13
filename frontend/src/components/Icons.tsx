@@ -56,3 +56,11 @@ export function RefreshIcon() {
     </svg>
   )
 }
+
+export function PlusIcon() {
+  return (
+    <svg {...common} width={24} height={24} strokeWidth={1.8}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  )
+}

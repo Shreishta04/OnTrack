@@ -2,6 +2,21 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { getServer, logIn, resetPassword, saveServer, signUp } from '../api'
 import type { Me } from '../types'
 import { COUNTRIES, CURRENCIES, deviceZone, guessCountry, timeZones } from '../places'
+import { isInstalled } from '../hooks/usePhone'
+
+// In a phone's browser (not yet opened from the home screen): how to install.
+// On iPhone the home-screen app keeps its own login, separate from Safari.
+function installTip(): ReactNode {
+  if (isInstalled()) return null
+  const ua = navigator.userAgent
+  if (/iPhone|iPad|iPod/.test(ua)) {
+    return <>To use OnTrack like an app: tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>. Open it from there and log in once more: the home-screen app keeps its own login.</>
+  }
+  if (/Android/.test(ua)) {
+    return <>To use OnTrack like an app: tap <strong>⋮</strong>, then <strong>Install app</strong> (or Add to Home screen). Once installed, you can share products straight to OnTrack.</>
+  }
+  return null
+}
 
 export type AuthMode = 'login' | 'signup' | 'reset'
 
@@ -145,6 +160,8 @@ export default function AuthScreen({ mode: startMode, code: startCode, onSignedI
             <p className="budget-note">Forgot your password? Ask the person who invited you for a reset link.</p>
           )}
         </div>
+
+        {installTip() && <p className="install-tip">{installTip()}</p>}
 
         <details className="auth-server">
           <summary>Server</summary>

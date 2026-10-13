@@ -63,7 +63,7 @@ Only variables starting with `VITE_` reach the code. Vite copies them **into the
 
 ```
 src/
-├── main.tsx           entry point: draws <App /> into index.html's #root
+├── main.tsx           entry point: draws <App /> into index.html's #root; starts the service worker (built app only)
 ├── App.tsx            sign-in screen or the list; loads /summary, owns the current tab, handles button presses
 ├── api.ts             every request to the backend (login token, JSON, friendly errors); log in / sign up / log out
 ├── money.tsx          the person's currency: symbol and digit grouping, shared through a React context
@@ -72,12 +72,14 @@ src/
 ├── format.ts          store names ("Amazon"), short dates ("5 Oct"), plain-words errors and tips
 ├── index.css          design tokens (light + dark), layout and component styles
 ├── hooks/
-│   └── useTheme.ts    light / dark / follow the device, remembered in the browser
+│   ├── useTheme.ts    light / dark / follow the device, remembered in the browser
+│   └── usePhone.ts    phone-sized screen (the + button layout)? opened from the home screen?
 └── components/
     ├── BudgetCard.tsx     big "left" number, bar, totals, in-card budget editing
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
     ├── AddLink.tsx        paste-a-link box
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
+    ├── AddSheet.tsx       the phone's add sheet: both add forms, behind the + button
     ├── Tabs.tsx           Wish list · Later · Bought · All, sliding underline
     ├── ItemList.tsx       the rows for the current tab, or an empty message
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
@@ -90,6 +92,15 @@ src/
 **Signing in:** `App` shows `AuthScreen` when this browser has no login token, or when the address has `?invite=…` or `?reset=…` (the links made in Account). After signing in, the code is removed from the address bar so a reload doesn't reuse it. Any `401` later (logged out elsewhere, password changed) makes `api.ts` forget the token and fire a `ontrack:signed-out` event, and `App` goes back to the sign-in screen, clearing the list from view.
 
 **How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits. It also reloads when the page becomes visible again (`visibilitychange`), so changes made elsewhere, like the iPhone's Refresh OnTrack, show up without a manual reload.
+
+## Phone app (PWA)
+
+- `public/manifest.webmanifest`: name, icons, `display: standalone` (full screen from the home screen), and `share_target`, which puts the installed app in Android's share menu (shares arrive as `/?title=&text=&url=`, read in `App.tsx`).
+- `public/sw.js`: the service worker. The page network-first, `/assets/…` from its saved copy, everything else (including the server, fonts) untouched. Registered only in the built app, so `npm run dev` never serves stale files. To try it locally: `npm run build` then `npm run preview` (http://localhost:4173, add it to `ONTRACK_CORS_ORIGINS`).
+- The offline list is saved by `api.ts` (`save` / `saved`), not the service worker, and deleted on log out.
+- Phone layout below 860px wide (`usePhone`), the same width at which the two columns stack.
+- `index.css` uses `env(safe-area-inset-…)` with `viewport-fit=cover`, so nothing hides under the notch or home bar. Text boxes are 16px: smaller makes iPhone Safari zoom on every tap.
+- If an installed app seems stuck on an old version: close it fully and open it again while online (the page is fetched fresh each time; the old files are dropped).
 
 ## Conventions
 

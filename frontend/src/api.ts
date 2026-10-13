@@ -32,12 +32,48 @@ function saveToken(token: string) {
   localStorage.removeItem(OLD_KEY) // the old shared key shouldn't linger in this browser
 }
 
-// Forget this browser's login and tell the app to show the sign-in screen.
+// Forget this browser's login (and the offline copy of the list) and tell
+// the app to show the sign-in screen.
 export const SIGNED_OUT = 'ontrack:signed-out'
 export function signOutLocally() {
   localStorage.removeItem(TOKEN_KEY)
+  forgetSaved()
   window.dispatchEvent(new Event(SIGNED_OUT))
 }
+
+// ------------------------------------------------------- offline copy
+// After every successful load the app keeps a copy of your profile and list
+// in this browser, so with no signal it can still show them (read-only).
+// Cleared on log out, so the next person on this device never sees them.
+
+const SAVED_ME = 'ontrack.saved.me'
+const SAVED_SUMMARY = 'ontrack.saved.summary'
+
+export function save(kind: 'me' | 'summary', value: unknown) {
+  try {
+    localStorage.setItem(kind === 'me' ? SAVED_ME : SAVED_SUMMARY, JSON.stringify({ at: new Date().toISOString(), value }))
+  } catch {
+    // storage full or blocked: the app still works, just not offline
+  }
+}
+
+export function saved<T>(kind: 'me' | 'summary'): { at: string; value: T } | null {
+  try {
+    const raw = localStorage.getItem(kind === 'me' ? SAVED_ME : SAVED_SUMMARY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function forgetSaved() {
+  localStorage.removeItem(SAVED_ME)
+  localStorage.removeItem(SAVED_SUMMARY)
+}
+
+// Thrown when the server can't be reached at all (no signal, server asleep),
+// as opposed to the server answering with an error.
+export class Offline extends Error {}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const server = getServer()
@@ -48,7 +84,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       headers: { 'X-API-Key': getToken() ?? '', 'Content-Type': 'application/json', ...options.headers },
     })
   } catch {
-    throw new Error(`Can't reach the server at ${server}. Check your connection and try again.`)
+    throw new Offline(`Can't reach the server at ${server}. Check your connection and try again.`)
   }
 
   if (response.status === 204) return undefined as T // e.g. DELETE: nothing to read

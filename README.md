@@ -61,6 +61,14 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Spent this month** comes off the budget: `remaining = budget − spent this month − planned`
 - **What fits:** planned items are walked in priority order, and each is marked as fitting the budget or not
 
+**On the phone (installable app)**
+- **Installs like an app:** iPhone: Safari → Share → *Add to Home Screen*. Android: Chrome → ⋮ → *Install app*. It gets the OnTrack icon (a serif O over a sage line), opens full screen without the browser's bars, and keeps clear of the notch and the home bar
+- **List first:** on a phone the list comes straight after the budget card; the two add forms live behind a round **+** button that opens a sheet from the bottom. The laptop keeps both columns
+- **Works without signal:** the app itself is kept on the phone (a *service worker*), and the last list it loaded is saved, so with no connection it still opens and shows *"Offline · showing your list from 10:42"*, read-only. It reloads by itself when the connection comes back. Logging out deletes the saved copy
+- **Android: share to OnTrack:** once installed, OnTrack appears in Android's share menu. Share a product from the Amazon or Flipkart app (or a browser) and it's added. iPhone doesn't let web apps into its share menu, which is what the "Add to OnTrack" Shortcut is for
+- **No zoom when typing:** text boxes are 16px, the size below which iPhone Safari zooms in on every tap
+- The sign-in screen says how to install, per phone. On iPhone the home-screen app keeps **its own login**, separate from Safari, so it says to log in once more there
+
 **Web app**
 - **Budget card:** one big number, "Left after wish list" (or "Over budget" in clay), a bar showing spent / planned / left, and the three totals underneath. **Edit budget** opens a small form right inside the card
 - **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
@@ -522,12 +530,37 @@ Before inviting anyone, every item, link and the budget had to belong to someone
 - *A wrong email and a wrong password get the same answer and take the same time:* checking a dummy hash when the email doesn't exist stops anyone timing the reply to learn who has an account.
 - *Logins and sign-ups get their own rate limit* (10 a minute per address), on top of the general one.
 
+### 32. Making it feel like a phone app
+
+Most people will use OnTrack on their phone, from the home screen, so this round was about the phone rather than the laptop.
+
+**1. The list was three cards down.**
+- *Symptom:* on a phone the columns stack, so the budget card, *Add something* and *Add by hand* all came before the first item.
+- *Fix:* below 860px wide (the same width at which the columns stack, so the two always agree), the add forms move into a sheet behind a round **+** button. After adding, the sheet closes and the note under the header says what happened.
+
+**2. Every tap on a text box zoomed the page.**
+- *Cause:* iPhone Safari zooms into any text box whose text is smaller than 16px, and ours were 15px.
+- *Fix:* 16px.
+
+**3. Offline meant an error page.**
+- *Decision:* show the last list, read-only, rather than just "You're offline" (useful in a shop with bad signal).
+- *How:* two separate parts. A **service worker** (`public/sw.js`, a small script the browser runs in the background for the site) keeps the app's own files: the page network-first (so a new version always arrives when online), `/assets/…` from the saved copy (Vite gives every build new file names, so a saved file never goes stale), and files from older versions are deleted. It **never** touches requests to the server, so nothing with a login token is stored by it. The **list** is saved by the app itself after every good load, and shown when the server can't be reached at all (a separate `Offline` error, so a real server error still shows as an error). Logging out deletes the copy, so the next person on the phone never sees it.
+- *Only in the built app:* in development the service worker would keep serving old files while I edit, so `main.tsx` registers it only in production.
+
+**4. Android had no way to share into OnTrack.**
+- *Fix:* the manifest's `share_target` puts the installed app in Android's share menu. A share opens `/?title=…&text=…&url=…`; apps put the link in different places (Amazon's often inside the text), so the app takes the first web address it finds, keeps it through a log-in if needed, removes it from the address bar (a reload mustn't add it twice), and adds it.
+
+**5. Two small truths.** The tab icon was still Vite's purple lightning bolt; and the hint under the link box told Android users about the iPhone Shortcut. Both now fit the device.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
 - **The owner key is a master key:** `ONTRACK_API_KEY` still acts as my account. Once every Shortcut and the extension use device keys, it can be changed to a new random value that's only used as the first invite.
 - **Logins don't expire** until you log out, change the password, or a reset is used. Device keys can be removed in Account.
 - **No emails:** invite and reset links are copied and sent by hand. Fine for a handful of people.
+- **Offline is read-only:** changes need a connection (the app says so instead of failing).
+- **Sharing from Android uses the server's download,** so Amazon may still come back without a price there (Amazon blocks servers); add it by hand. Only the iPhone Shortcut and the extension download the page on the device.
+- **iPhone keeps two logins:** Safari and the home-screen app don't share storage, so you log in once in each.
 - **Rate limits live in memory:** they reset when the server restarts, and they'd need a shared store if OnTrack ever ran on several servers at once.
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
@@ -600,7 +633,7 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 - `frontend/vercel.json` adds the security headers (Challenge 28)
 
 **Pointing the phone and the extension at it**
-- Safari → the web app → log in → Share → **Add to Home Screen**
+- iPhone: Safari → the web app → Share → **Add to Home Screen** → open the icon → log in (the home-screen app keeps its own login). Android: Chrome → ⋮ → **Install app** → log in
 - **Account → Devices → New key** once per device (e.g. "iPhone Shortcuts", "Laptop extension"); each key is shown once
 - **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html`, header `X-API-Key` = the iPhone's device key
 - **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html`, with the device key in both
@@ -821,11 +854,15 @@ OnTrack/
 │   ├── requirements.txt
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
-    ├── index.html             the single HTML page (fonts, theme colour)
+    ├── index.html             the single HTML page (fonts, theme colour, icon, manifest, home-screen tags)
+    ├── public/
+    │   ├── manifest.webmanifest   app name, icons, full screen, Android share target
+    │   ├── sw.js                  service worker: keeps the app's files for offline
+    │   └── icon-*.png, apple-touch-icon.png, favicon-64.png   the serif O icon
     ├── .env.local             dev server address (git-ignored)
     ├── vercel.json            security headers for the deployed web app
     └── src/
-        ├── main.tsx           entry point: draws <App /> into the page
+        ├── main.tsx           entry point: draws <App /> into the page; starts the service worker (built app only)
         ├── App.tsx            sign-in screen or the list; loads /summary, owns the tab, handles button presses
         ├── api.ts             every request to the backend, with this browser's login token
         ├── money.tsx          the person's currency symbol and digit grouping, for every <Price>
@@ -834,12 +871,14 @@ OnTrack/
         ├── format.ts          store names, short dates, plain-words errors and tips
         ├── index.css          design tokens (light + dark), layout, components
         ├── hooks/
-        │   └── useTheme.ts    light / dark / follow the device
+        │   ├── useTheme.ts    light / dark / follow the device
+        │   └── usePhone.ts    phone-sized screen? opened from the home screen?
         └── components/
             ├── BudgetCard.tsx     budget, bar, totals, in-card budget editing
             ├── Price.tsx          every amount, drawn the same way, in the person's currency
             ├── AddLink.tsx        paste-a-link box
             ├── AddByHand.tsx      name, optional link, price
+            ├── AddSheet.tsx       the phone's add sheet, behind the + button
             ├── Tabs.tsx           Wish list · Later · Bought · All
             ├── ItemList.tsx       the rows for the current tab
             ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
@@ -875,7 +914,7 @@ OnTrack/
 - [x] Refresh button in the header (↻), and reload when the app's tab comes back into view; the server never fetches phone-only stores (Amazon)
 - [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
 - [x] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`; Update price for saved items; Remove for pages without a price
-- [ ] Installable PWA (home-screen icon, app name, offline shell)
+- [x] Installable PWA: home-screen icon and name, full screen, safe areas, works offline (read-only last list), Android share target; phone layout with the add forms behind a + button
 - [x] Postgres support: one setting (`DATABASE_URL`) picks SQLite or Postgres; tests run on both; a script copies my data across, keeping ids
 - [x] GitHub Actions: every push runs the tests on SQLite and Postgres, and builds and lints the frontend
 - [x] Hardening before going public: block private/internal addresses (SSRF), upload size limit, rate limiting, month boundary in India time
@@ -973,4 +1012,4 @@ OnTrack/
 - Per-person currency, country and time zone: guessed from the device at sign-up, changeable in Account; prices show `₹1,23,456` or `$120.50`, and "this month" follows each person's calendar
 - Web app: a sign-in screen (log in, sign up from an invite link, new password from a reset link) and an Account sheet (profile, device keys, people and invites, password, log out), in the same linen-and-cocoa design. A rejected login now clears the list and returns to sign-in
 - 40 new tests (all fail on the old code), 171 in total on SQLite and Postgres 16; ran the whole flow in headless Chromium: owner sign-up, device key, invite, a US friend's own dollar list in dark mode
-
+- `feature/pwa`: OnTrack as a phone app. A manifest (name, serif-O icon, full screen, Android **share target**), a hand-written service worker that keeps the app's files for offline (never the server's answers), and the last list saved in the browser for a read-only offline view with "Offline · showing your list from …". On the phone the add forms moved into a sheet behind a **+** button, text boxes went to 16px (no iPhone zoom), content keeps clear of the notch and home bar, "WISH LIST" fits on one line, and the sign-in screen explains installing per phone. Tested the production build in headless Chromium as an iPhone and an Android phone: installed service worker, network cut and page reloaded, Android share after a log-in, log-out wiping the saved copy
