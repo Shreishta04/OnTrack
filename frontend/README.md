@@ -73,7 +73,8 @@ src/
 ├── index.css          design tokens (light + dark), layout and component styles
 ├── hooks/
 │   ├── useTheme.ts    light / dark / follow the device, remembered in the browser
-│   └── usePhone.ts    phone-sized screen (the + button layout)? opened from the home screen?
+│   ├── usePhone.ts    phone-sized screen (the + button layout)? opened from the home screen?
+│   └── useNewVersion.ts  is a newer build live? (shows the Update line)
 └── components/
     ├── BudgetCard.tsx     big "left" number, bar, totals, in-card budget editing
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
@@ -101,7 +102,8 @@ src/
 - The offline list is saved by `api.ts` (`save` / `saved`), not the service worker, and deleted on log out.
 - Phone layout below 860px wide (`usePhone`), the same width at which the two columns stack.
 - `index.css` uses `env(safe-area-inset-…)` with `viewport-fit=cover`, so nothing hides under the notch or home bar. Text boxes are 16px: smaller makes iPhone Safari zoom on every tap.
-- If an installed app seems stuck on an old version: close it fully and open it again while online (the page is fetched fresh each time; the old files are dropped).
+- New versions: `useNewVersion` compares the running `/assets/index-….js` name with the one Vercel serves, when the app comes back into view and every 15 minutes, and App shows "A new version of OnTrack is ready · Update". Without it, an installed app (only paused in the background) kept the old page until swiped away.
+- Offline: the offline line is a button (Try again), and the app retries every 20 seconds while offline.
 
 ## Conventions
 

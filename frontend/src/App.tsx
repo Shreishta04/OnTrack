@@ -16,6 +16,7 @@ import AddByHand from './components/AddByHand'
 import AddSheet from './components/AddSheet'
 import SelectionBar, { type BulkAction } from './components/SelectionBar'
 import { usePhone } from './hooks/usePhone'
+import { useNewVersion } from './hooks/useNewVersion'
 
 // An invite or reset link opens the app as /?invite=CODE or /?reset=CODE.
 function linkFromUrl(): { mode: AuthMode; code: string } | null {
@@ -116,6 +117,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   const [picked, setPicked] = useState<Set<number>>(new Set()) // ticked items: a "what if", nothing saved
   const theme = useTheme()
   const phone = usePhone()
+  const newVersion = useNewVersion()
 
   // Fetch the latest numbers and items (on opening, after a button press,
   // on coming back). Each good answer is saved; with no connection, the
@@ -174,6 +176,23 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load only uses setters
   }, [])
+
+  // While showing the saved copy, quietly try the server again every 20
+  // seconds: a server waking from sleep, or signal coming back without the
+  // phone announcing it, is picked up without anyone tapping anything.
+  useEffect(() => {
+    if (!offlineSince) return
+    const timer = setInterval(load, 20_000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load only uses setters
+  }, [offlineSince])
+
+  const [retrying, setRetrying] = useState(false)
+  async function retryNow() {
+    setRetrying(true)
+    await load()
+    setRetrying(false)
+  }
 
   // The note under the header fades away after a few seconds.
   useEffect(() => {
@@ -311,10 +330,17 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
         </div>
       </header>
       {offlineSince && (
-        <p className="offline-note" role="status">
+        <button className="offline-note" role="status" onClick={retryNow} disabled={retrying}>
           <i className="dot dot-offline" />
-          Offline · showing your list from {savedWhen(offlineSince)}
-        </p>
+          Offline · showing your list from {savedWhen(offlineSince)} ·{' '}
+          <span className="note-action">{retrying ? 'Trying…' : 'Try again'}</span>
+        </button>
+      )}
+      {newVersion && (
+        <button className="offline-note update-note" onClick={() => window.location.reload()}>
+          <i className="dot dot-update" />
+          A new version of OnTrack is ready · <span className="note-action">Update</span>
+        </button>
       )}
       {note && (
         <p className={note.tone === 'warn' ? 'header-note is-warn' : 'header-note'} role="status">

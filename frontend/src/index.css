@@ -1111,9 +1111,15 @@ select.field option {
   gap: 0;
 }
 
-/* "Offline · showing your list from 10:42" */
+/* "Offline · showing your list from 10:42 · Try again", and
+   "A new version of OnTrack is ready · Update". Tappable lines. */
 .offline-note {
   margin: -12px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1282,4 +1288,19 @@ body {
 /* room under the list, so the bar never covers the last rows */
 .page.has-bar {
   padding-bottom: calc(220px + env(safe-area-inset-bottom));
+}
+
+.note-action {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+}
+.dot-update {
+  background: var(--good-dot);
+}
+/* The offline line and the update line can both show; space them out */
+.offline-note + .offline-note {
+  margin-top: -18px;
 }
