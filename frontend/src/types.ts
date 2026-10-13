@@ -56,3 +56,60 @@ export interface RefreshResult {
   changed: { link_id: number; old_price: number; new_price: number }[]
   failed: { link_id: number; error: string | null }[]
 }
+// ------------------------------------------------------------- accounts
+// They mirror public_user(), list_tokens() and friends in backend/auth.py.
+
+export interface Me {
+  id: number
+  email: string
+  name: string
+  currency: string // "INR", "USD"…
+  country: string // "IN", "US"…
+  timezone: string // "Asia/Kolkata"…
+  is_admin: boolean // the owner: can invite people
+  created_at: string
+}
+
+export interface AuthResult {
+  user: Me
+  token: string
+}
+
+// A login or a device key, as listed in Account (never the key itself).
+export interface TokenInfo {
+  id: number
+  kind: 'session' | 'device'
+  name: string
+  created_at: string
+  last_used_at: string | null
+  current: boolean // the one this browser is using
+}
+
+export interface DeviceToken {
+  name: string
+  token: string // shown once
+}
+
+export interface Invite {
+  id: number
+  note: string | null
+  for_email: string | null // set: a password-reset link for this person
+  created_at: string
+  expires_at: string
+  used_at: string | null
+}
+
+export interface NewCode {
+  id: number
+  code: string
+  expires_at: string
+}
+
+export interface Person {
+  id: number
+  email: string
+  name: string
+  is_admin: boolean
+  created_at: string
+  items: number
+}

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { setBudget } from '../api'
 import type { Summary } from '../types'
 import Price from './Price'
+import { useMoney } from '../money'
 
 interface BudgetCardProps {
   summary: Summary
@@ -76,6 +77,7 @@ function BudgetEditor({
   const [draft, setDraft] = useState(current == null ? '' : String(current))
   const [saving, setSaving] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
+  const money = useMoney()
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault() // stop the browser reloading the page, which forms do by default
@@ -97,7 +99,7 @@ function BudgetEditor({
 
   return (
     <form className="budget-edit" onSubmit={handleSubmit}>
-      <label className="eyebrow" htmlFor="budget-input">Monthly budget (₹)</label>
+      <label className="eyebrow" htmlFor="budget-input">Monthly budget ({money.symbol})</label>
       <input
         id="budget-input"
         className="field"

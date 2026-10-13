@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { addManual } from '../api'
 import type { Item } from '../types'
+import { useMoney } from '../money'
 
 interface AddByHandProps {
   onAdded: (item: Item) => Promise<void>
@@ -13,11 +14,12 @@ export default function AddByHand({ onAdded }: AddByHandProps) {
   const [url, setUrl] = useState('')
   const [price, setPrice] = useState('')
   const [adding, setAdding] = useState(false)
+  const money = useMoney()
   const [message, setMessage] = useState<{ text: string; tone: 'muted' | 'warn' } | null>(null)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault() // stop the browser reloading the page
-    const amount = Number(price.replace(/[₹,\s]/g, '')) // accept "1,299" or "₹1299"
+    const amount = Number(price.replace(/[^\d.]/g, '')) // accept "1,299", "₹1299" or "$12.50"
     if (!name.trim()) return
     if (!Number.isFinite(amount) || amount <= 0) {
       setMessage({ text: 'Type the price as a number, for example 1299.', tone: 'warn' })
@@ -63,7 +65,7 @@ export default function AddByHand({ onAdded }: AddByHandProps) {
         />
         <div className="hand-row">
           <label className="price-field">
-            <span className="cur-in" aria-hidden="true">₹</span>
+            <span className="cur-in" aria-hidden="true">{money.symbol}</span>
             <input
               className="field"
               inputMode="decimal"

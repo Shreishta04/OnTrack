@@ -1,18 +1,68 @@
 import { useEffect, useState } from 'react'
-import { deleteItem, getSummary, patchItem, refreshPrices } from './api'
-import type { Item, Summary } from './types'
+import { SIGNED_OUT, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices } from './api'
+import type { Item, Me, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
 import Tabs, { type TabId } from './components/Tabs'
 import ItemList from './components/ItemList'
 import type { RowAction } from './components/ItemRow'
-import SettingsSheet from './components/SettingsSheet'
+import AccountSheet from './components/AccountSheet'
+import AuthScreen, { type AuthMode } from './components/AuthScreen'
+import { MoneyProvider } from './money'
 import { MoonIcon, RefreshIcon, SlidersIcon, SunIcon } from './components/Icons'
 import { refreshNote } from './format'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
 import AddByHand from './components/AddByHand'
 
+// An invite or reset link opens the app as /?invite=CODE or /?reset=CODE.
+function linkFromUrl(): { mode: AuthMode; code: string } | null {
+  const params = new URLSearchParams(window.location.search)
+  const invite = params.get('invite')
+  const reset = params.get('reset')
+  if (invite) return { mode: 'signup', code: invite }
+  if (reset) return { mode: 'reset', code: reset }
+  return null
+}
+
+// Who is using the app decides what it shows: the sign-in screen, or their list.
 export default function App() {
+  const [signedIn, setSignedIn] = useState(() => !!getToken())
+  const [link, setLink] = useState(linkFromUrl)
+  const [me, setMe] = useState<Me | null>(null)
+
+  // Any request that finds this login has ended (api.ts) brings us back here,
+  // and the list is cleared from the screen.
+  useEffect(() => {
+    const onSignedOut = () => {
+      setSignedIn(false)
+      setMe(null)
+    }
+    window.addEventListener(SIGNED_OUT, onSignedOut)
+    return () => window.removeEventListener(SIGNED_OUT, onSignedOut)
+  }, [])
+
+  useEffect(() => {
+    if (signedIn) getMe().then(setMe).catch(() => {}) // a 401 already signs out; a network error shows on the list
+  }, [signedIn])
+
+  function handleSignedIn(user: Me) {
+    window.history.replaceState(null, '', window.location.pathname) // drop ?invite=… so a reload doesn't reuse it
+    setLink(null)
+    setMe(user)
+    setSignedIn(true)
+  }
+
+  if (!signedIn || link) {
+    return <AuthScreen mode={link?.mode ?? 'login'} code={link?.code ?? ''} onSignedIn={handleSignedIn} />
+  }
+  return (
+    <MoneyProvider currency={me?.currency ?? 'INR'} country={me?.country ?? 'IN'}>
+      <WishList me={me} onMe={setMe} />
+    </MoneyProvider>
+  )
+}
+
+function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<TabId>('planned')
@@ -110,7 +160,7 @@ export default function App() {
       <header className="header">
         <div>
           <div className="brand">OnTrack</div>
-          <div className="eyebrow">Your wish list, on budget</div>
+          <div className="eyebrow">{me ? `${me.name.split(' ')[0]}’s wish list` : 'Your wish list, on budget'}</div>
         </div>
         <div className="header-actions">
           <button
@@ -129,7 +179,7 @@ export default function App() {
           >
             {theme.isDark ? <SunIcon /> : <MoonIcon />}
           </button>
-          <button className="icon-btn" aria-label="Open settings" onClick={() => setSettingsOpen(true)}>
+          <button className="icon-btn" aria-label="Open account" onClick={() => setSettingsOpen(true)} disabled={!me}>
             <SlidersIcon />
           </button>
         </div>
@@ -160,8 +210,16 @@ export default function App() {
         </main>
       </div>
 
-      {settingsOpen && (
-        <SettingsSheet onClose={() => setSettingsOpen(false)} onSaved={load} />
+      {settingsOpen && me && (
+        <AccountSheet
+          me={me}
+          onClose={() => setSettingsOpen(false)}
+          onChanged={(updated) => {
+            onMe(updated)
+            load() // "this month" may have moved with a new time zone
+          }}
+          onServerChanged={load}
+        />
       )}
     </div>
   )
