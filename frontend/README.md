@@ -70,30 +70,36 @@ src/
 ├── places.ts          countries, currencies, time zones, and first guesses from the device
 ├── types.ts           TypeScript shapes of the data the backend sends
 ├── format.ts          store names ("Amazon"), short dates ("5 Oct"), plain-words errors and tips
+├── sort.ts            the four sort orders (newest, oldest, price both ways), remembered on this device
+├── tabs.ts            the four tabs, left to right (shared by the tabs, swiping and the slide direction)
 ├── index.css          design tokens (light + dark), layout and component styles
 ├── hooks/
 │   ├── useTheme.ts    light / dark / follow the device, remembered in the browser
 │   ├── usePhone.ts    phone-sized screen (the + button layout)? opened from the home screen?
-│   └── useNewVersion.ts  is a newer build live? (shows the Update line)
+│   ├── useNewVersion.ts  is a newer build live? (shows the Update line)
+│   └── useSwipe.ts    a flick left or right on the list changes tab (ignores edge swipes, scrolling, slow drags)
 └── components/
     ├── BudgetCard.tsx     big "left" number, bar, totals, in-card budget editing
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
     ├── AddLink.tsx        paste-a-link box
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
     ├── AddSheet.tsx       the phone's add sheet: both add forms, behind the + button
-    ├── SelectionBar.tsx   ticked items: live total, left / over, Mark bought · Move to Later · Park the rest · Back to wish list
-    ├── Tabs.tsx           Wish list · Later · Bought · All, sliding underline
+    ├── SelectionBar.tsx   ticked items on any tab: live total, left / over (Wish list, Later), the right buttons per tab, "are you sure?" for 5+
+    ├── ListTools.tsx      the row above the list: Select all / Clear all, and the sort menu
+    ├── Tabs.tsx           Wish list · Later · Bought · All, with a pill that measures and follows the active tab
     ├── ItemList.tsx       the rows for the current tab, or an empty message
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
     ├── AccountSheet.tsx   profile (currency, country, time zone), device keys, people + invites (owner), password, log out
-    └── Icons.tsx          small line icons (refresh, moon, sun, sliders, close)
+    └── Icons.tsx          small line icons (refresh, moon, sun, sliders, close, chevron, check)
 ```
 
 **Signing in:** `App` shows `AuthScreen` when this browser has no login token, or when the address has `?invite=…` or `?reset=…` (the links made in Account). After signing in, the code is removed from the address bar so a reload doesn't reuse it. Any `401` later (logged out elsewhere, password changed) makes `api.ts` forget the token and fire a `ontrack:signed-out` event, and `App` goes back to the sign-in screen, clearing the list from view.
 
 **How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits. It also reloads when the page becomes visible again (`visibilitychange`), so changes made elsewhere, like the iPhone's Refresh OnTrack, show up without a manual reload.
+
+**Sorting and ticking happen in the browser:** `/summary` already holds every item, so `sortItems()` reorders a copy for the current tab, and ticks are just a set of ids in `App`'s state (a "what if"). Only the bar's buttons talk to the server: one `PATCH /items/{id}` per item, skipping items already on the target list, then one reload.
 
 ## Phone app (PWA)
 
