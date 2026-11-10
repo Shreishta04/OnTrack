@@ -1,4 +1,4 @@
-// Countries, currencies and time zones offered at sign-up and in Account.
+// Countries, currencies and time zones offered at sign-up and in Settings.
 // The server accepts the same currencies (CURRENCIES in backend/auth.py).
 
 export interface Country {

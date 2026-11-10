@@ -6,13 +6,12 @@ import Thumb from './Thumb'
 
 const TAG = { planned: 'Wish list', later: 'Later', purchased: 'Bought' }
 
-// The coloured note beside the store name. No "fits / over budget" here any
-// more: one running total made every row after the first big item say
-// "Over budget". Tick items instead and the selection bar adds them up.
+// The note beside the store name: where the item is, or when it was saved.
+// (No "fits / over budget" here: tick items and the selection bar adds
+// them up. "Needs a price" sits on the right, where the price would be.)
 function badgeFor(item: Item): { text: string; tone: 'good' | 'warn' | 'muted' } | null {
   if (item.status === 'later') return { text: 'Parked', tone: 'muted' }
   if (item.status === 'purchased') return { text: `Bought ${shortDate(item.purchased_at)}`, tone: 'muted' }
-  if (item.needs_price) return { text: 'Needs a price', tone: 'warn' }
   return null
 }
 
@@ -85,7 +84,7 @@ export default function ItemRow({ item, showTag, onAction, picked, onPick }: Ite
           <div className="row-name">{item.name}</div>
           <div className="row-meta">
             <span>{storeName(item)}</span>
-            {badge && (
+            {badge ? (
               <>
                 <span aria-hidden="true">·</span>
                 <span className={`badge badge-${badge.tone}`}>
@@ -93,20 +92,32 @@ export default function ItemRow({ item, showTag, onAction, picked, onPick }: Ite
                   {badge.text}
                 </span>
               </>
+            ) : (
+              <>
+                <span aria-hidden="true">·</span>
+                <span>{shortDate(item.created_at)}</span>
+              </>
             )}
             {showTag && <span className="tag">{TAG[item.status]}</span>}
           </div>
         </div>
 
+        {/* Under the price: how much it has dropped (green pill), else the
+            struck-through MRP. No price yet: a clay pill instead. */}
         <div className="row-price">
-          <Price amount={shownPrice} className="row-amount" />
-          {showMrp && <Price amount={item.mrp} className="row-mrp" />}
+          {item.needs_price && shownPrice == null ? (
+            <span className="pill pill-warn">Needs a price</span>
+          ) : (
+            <>
+              <Price amount={shownPrice} className="row-amount" />
+              {drop > 0 ? (
+                <span className="pill pill-good">↓ <Price amount={drop} /></span>
+              ) : (
+                showMrp && <Price amount={item.mrp} className="row-mrp" />
+              )}
+            </>
+          )}
         </div>
-
-        <svg className="plus" width="20" height="20" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
       </button>
       </div>
 

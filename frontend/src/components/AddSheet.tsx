@@ -25,7 +25,7 @@ export default function AddSheet({ onClose, onAdded }: AddSheetProps) {
       <button className="scrim" aria-label="Close" onClick={onClose} />
       <section className="card sheet add-sheet" role="dialog" aria-modal="true" aria-labelledby="add-title">
         <div className="sheet-head">
-          <h2 id="add-title" className="serif sheet-title">Add something</h2>
+          <h2 id="add-title" className="sheet-title">Add something</h2>
           <button className="icon-btn" aria-label="Close" onClick={onClose}>
             <CloseIcon />
           </button>
