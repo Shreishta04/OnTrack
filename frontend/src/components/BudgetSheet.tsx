@@ -1,16 +1,18 @@
 import { useEffect } from 'react'
 import BudgetEditor from './BudgetEditor'
 import { CloseIcon } from './Icons'
+import type { PeriodInfo } from '../types'
 
 interface BudgetSheetProps {
   current: number | null
+  period?: PeriodInfo
   onClose: () => void
   onSaved: () => Promise<void>
 }
 
-// Tapping the budget card opens this small sheet from the bottom: a shortcut
-// to the same editor that's in Settings → Budget.
-export default function BudgetSheet({ current, onClose, onSaved }: BudgetSheetProps) {
+// Tapping the budget card (or "Set it" on the reminder bar) opens this sheet
+// from the bottom: a shortcut to the same editor that's in Settings → Budget.
+export default function BudgetSheet({ current, period, onClose, onSaved }: BudgetSheetProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -30,7 +32,8 @@ export default function BudgetSheet({ current, onClose, onSaved }: BudgetSheetPr
           </button>
         </div>
         <div className="sheet-body">
-          <BudgetEditor current={current} onCancel={onClose} onSaved={onSaved} />
+          {/* no Cancel button: the ✕ above closes the sheet */}
+          <BudgetEditor current={current} period={period} onSaved={onSaved} />
         </div>
       </section>
     </div>

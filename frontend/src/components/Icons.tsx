@@ -181,3 +181,22 @@ export function CheckIcon() {
     </svg>
   )
 }
+
+// Three bars: the Analytics page.
+export function ChartIcon() {
+  return (
+    <svg {...common}>
+      <path d="M5 20V12M12 20V5M19 20v-6" strokeWidth={2} />
+    </svg>
+  )
+}
+
+// A small calendar: the reset day row in Settings.
+export function CalendarIcon() {
+  return (
+    <svg {...common} width={17} height={17} strokeWidth={1.8}>
+      <rect x="4" y="5.5" width="16" height="14.5" rx="2" />
+      <path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" />
+    </svg>
+  )
+}

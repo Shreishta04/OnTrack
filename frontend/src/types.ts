@@ -46,6 +46,29 @@ export interface Summary {
   planned_count: number
   needs_price_count: number
   items: Item[]
+  period?: PeriodInfo // missing only from a server older than budget periods
+}
+
+// The budget period today falls in ("25 Oct – 24 Nov").
+export interface PeriodInfo {
+  starts_on: string // YYYY-MM-DD, on the person's own calendar
+  ends_on: string // the last day, included
+  budget: number | null // this period's budget
+  custom: boolean // set "just for this period"
+  default_budget: number | null // what every new period starts with
+  reset_day: number | null // 1–31; null: not chosen yet
+  days_left: number // today included
+  days_total: number
+}
+
+// One row of GET /periods (newest first).
+export interface PeriodRow {
+  starts_on: string
+  ends_on: string
+  budget: number | null
+  custom: boolean
+  spent: number
+  current: boolean
 }
 
 // What POST /refresh sends back.

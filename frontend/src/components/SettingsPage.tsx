@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode, type TouchEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   cancelInvite, changePassword, createInvite, createResetCode, createToken, getServer, linkFor,
   listInvites, listPeople, listTokens, logOut, revokeToken, saveServer, updateMe,
@@ -6,12 +6,13 @@ import {
 import type { Invite, Me, Person, Summary, TokenInfo } from '../types'
 import type { ThemePref } from '../hooks/useTheme'
 import { COUNTRIES, CURRENCIES, timeZones } from '../places'
-import { shortDate } from '../format'
+import { dayMonth, ordinal, shortDate } from '../format'
+import { useEdgeBack } from '../hooks/useEdgeBack'
 import { useMoney } from '../money'
 import BudgetEditor from './BudgetEditor'
 import Price from './Price'
 import {
-  BackIcon, ChevronRightIcon, ClockIcon, GlobeIcon, KeyIcon, LockIcon, LogOutIcon, MoonIcon, PeopleIcon,
+  BackIcon, CalendarIcon, ChevronRightIcon, ClockIcon, GlobeIcon, KeyIcon, LockIcon, LogOutIcon, MoonIcon, PeopleIcon,
   PhoneIcon, SunIcon, WalletIcon,
 } from './Icons'
 
@@ -44,26 +45,12 @@ export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, 
       .catch(() => setKeyCount(null))
   }, [])
 
-  // The iPhone's home-screen app has no back swipe of its own, so give it
-  // one: swipe in from the left edge to go back, like native iPhone apps.
-  // Only there: Safari and Android already have their own Back.
-  const edge = useRef<{ x: number; y: number; t: number } | null>(null)
-  const installedIPhone = (navigator as Navigator & { standalone?: boolean }).standalone === true
-  function onTouchStart(e: TouchEvent) {
-    const touch = e.touches[0]
-    edge.current = installedIPhone && touch.clientX <= 24 ? { x: touch.clientX, y: touch.clientY, t: Date.now() } : null
-  }
-  function onTouchEnd(e: TouchEvent) {
-    const from = edge.current
-    edge.current = null
-    if (!from) return
-    const touch = e.changedTouches[0]
-    const across = touch.clientX - from.x
-    if (across > 70 && across > Math.abs(touch.clientY - from.y) * 1.5 && Date.now() - from.t < 800) onBack()
-  }
+  const edgeBack = useEdgeBack(onBack) // the iPhone home-screen app's back swipe
+  const period = summary?.period
+  const defaultBudget = period ? period.default_budget : summary?.budget
 
   return (
-    <div className="page settings-page" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+    <div className="page settings-page" {...edgeBack}>
       <div className="settings-top">
         <button className="icon-btn" aria-label="Back to your list" onClick={onBack}>
           <BackIcon />
@@ -98,20 +85,40 @@ export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, 
         <Row
           icon={<WalletIcon />}
           label="Monthly budget"
-          value={summary?.budget == null ? 'Not set' : <Price amount={summary.budget} />}
+          value={defaultBudget == null ? 'Not set' : <Price amount={defaultBudget} />}
           open={open === 'budget'}
           onToggle={() => toggle('budget')}
-        >
-          <BudgetEditor
-            current={summary?.budget ?? null}
-            onCancel={() => setOpen(null)}
-            onSaved={async () => {
-              await onBudgetSaved()
-              setOpen(null)
-            }}
+        />
+        {/* both rows open the same editor, underneath the second (like Region) */}
+        {period && (
+          <Row
+            icon={<CalendarIcon />}
+            label="Resets on"
+            value={period.reset_day == null ? 'Not set' : `the ${ordinal(period.reset_day)}`}
+            open={open === 'budget'}
+            onToggle={() => toggle('budget')}
           />
-        </Row>
+        )}
+        {open === 'budget' && (
+          <div className="set-panel fade-in">
+            <BudgetEditor
+              period={period}
+              current={summary?.budget ?? null}
+              onCancel={() => setOpen(null)}
+              onSaved={async () => {
+                await onBudgetSaved()
+                setOpen(null)
+              }}
+            />
+          </div>
+        )}
       </div>
+      {period?.custom && period.budget != null && (
+        <p className="set-note">
+          This period ({dayMonth(period.starts_on)} – {dayMonth(period.ends_on)}) has its own budget,{' '}
+          <Price amount={period.budget} />, set just for it.
+        </p>
+      )}
 
       <h2 className="set-heading">Region</h2>
       <div className="set-group">

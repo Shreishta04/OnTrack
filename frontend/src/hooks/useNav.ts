@@ -4,14 +4,15 @@ import { useEffect, useState } from 'react'
 // kept in the browser's history so the phone's Back (button or swipe)
 // works like in any app:
 //   Back with a sheet open    closes the sheet
-//   Back on Settings          returns to the list
+//   Back on Settings or
+//   Analytics                 returns to the list
 //   Back on the list          leaves the app, as usual
 //
 // Every page or sheet we open adds one history entry ("pushState"); every
 // close goes back one entry, the same thing the Back button does. So our own
 // ✕ buttons and the phone's Back can never disagree.
 
-export type Page = 'list' | 'settings'
+export type Page = 'list' | 'settings' | 'analytics'
 export type Layer = 'add' | 'budget' | 'search' | null
 
 interface Entry {
@@ -20,10 +21,11 @@ interface Entry {
   ours?: boolean // true: we added this entry, so going back stays in the app
 }
 
-const PATHS: Record<Page, string> = { list: '/', settings: '/settings' }
+const PATHS: Record<Page, string> = { list: '/', settings: '/settings', analytics: '/analytics' }
 
 function pageFromPath(): Page {
-  return window.location.pathname.replace(/\/+$/, '') === '/settings' ? 'settings' : 'list'
+  const path = window.location.pathname.replace(/\/+$/, '')
+  return path === '/settings' ? 'settings' : path === '/analytics' ? 'analytics' : 'list'
 }
 
 // What the browser's history says is on screen now.
@@ -52,7 +54,7 @@ export function useNav() {
   }
 
   // Close what's showing. Normally that's one step back in history. If the
-  // app was opened straight on /settings, there's no step to go back to, so
+  // app was opened straight on /settings or /analytics, there's no step to go back to, so
   // swap the entry for the list instead.
   function back(fallback: Entry) {
     if ((window.history.state as Entry | null)?.ours) {

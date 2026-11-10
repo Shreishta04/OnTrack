@@ -10,10 +10,12 @@ import { useSwipe } from './hooks/useSwipe'
 import ItemList from './components/ItemList'
 import type { RowAction } from './components/ItemRow'
 import SettingsPage from './components/SettingsPage'
+import AnalyticsPage from './components/AnalyticsPage'
+import BudgetSetup from './components/BudgetSetup'
 import BudgetSheet from './components/BudgetSheet'
 import AuthScreen, { type AuthMode } from './components/AuthScreen'
 import { MoneyProvider } from './money'
-import { CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon } from './components/Icons'
+import { ChartIcon, CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon } from './components/Icons'
 import { refreshNote, storeName } from './format'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
@@ -50,6 +52,27 @@ function takeSharedLink() {
   window.history.replaceState(null, '', window.location.pathname) // a reload shouldn't add it twice
 }
 takeSharedLink()
+
+// "Skip for now" on the budget setup screen is remembered on this device
+// until the next log-in, so the screen doesn't come back on every visit (the
+// reminder bar on the list stays until the budget and reset day are set).
+// Browser storage can be blocked (private windows), hence the try/catch.
+const SKIP_KEY = 'ontrack.setupSkipped'
+function setupSkipped(): boolean {
+  try {
+    return localStorage.getItem(SKIP_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+function rememberSkip(skip: boolean) {
+  try {
+    if (skip) localStorage.setItem(SKIP_KEY, '1')
+    else localStorage.removeItem(SKIP_KEY)
+  } catch {
+    // nothing to do: the setup screen just shows again next time
+  }
+}
 
 // "10:42" today, "12 Oct, 10:42" before today.
 function savedWhen(iso: string): string {
@@ -98,6 +121,7 @@ export default function App() {
   function handleSignedIn(user: Me) {
     window.history.replaceState(null, '', window.location.pathname) // drop ?invite=… so a reload doesn't reuse it
     setLink(null)
+    rememberSkip(false) // a fresh log-in asks for the budget again, if it's still missing
     changeMe(user)
     setSignedIn(true)
   }
@@ -132,6 +156,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // browser's history so the phone's Back closes them (hooks/useNav.ts).
   const nav = useNav()
   const searching = nav.layer === 'search'
+  const [skipped, setSkipped] = useState(setupSkipped)
 
   // Fetch the latest numbers and items (on opening, after a button press,
   // on coming back). Each good answer is saved; with no connection, the
@@ -373,6 +398,14 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     </>
   )
 
+  // The budget or the reset day isn't set yet. (period is missing only from
+  // an older server: then there's nothing to ask for.)
+  const period = summary?.period
+  const needsSetup = !!period && (period.default_budget == null || period.reset_day == null)
+  const reminder = !period ? '' : period.default_budget == null && period.reset_day == null
+    ? 'Set your budget and reset day'
+    : period.default_budget == null ? 'Set your monthly budget' : 'Pick the day your budget resets'
+
   if (nav.page === 'settings' && me) {
     return (
       <SettingsPage
@@ -391,6 +424,28 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     )
   }
 
+  if (nav.page === 'analytics' && me) {
+    return <AnalyticsPage me={me} summary={summary} notes={notes} onBack={nav.back} />
+  }
+
+  // Just logged in, budget not set: ask for it before showing the list.
+  // Not while offline (the saved copy can be out of date, and saving needs
+  // a connection).
+  if (needsSetup && !skipped && !offlineSince && period) {
+    return (
+      <BudgetSetup
+        period={period}
+        name={me?.name}
+        onSaved={load}
+        onSkip={() => {
+          rememberSkip(true)
+          setSkipped(true)
+          window.scrollTo(0, 0)
+        }}
+      />
+    )
+  }
+
   const pageClass = ['page', selecting && 'has-bar', searching && 'is-searching'].filter(Boolean).join(' ')
 
   return (
@@ -401,6 +456,11 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           <button className="icon-btn" aria-label="Search your list" onClick={openSearch} disabled={!summary}>
             <SearchIcon />
           </button>
+          {period && (
+            <button className="icon-btn" aria-label="Analytics" title="Analytics" onClick={() => nav.go('analytics')} disabled={!me}>
+              <ChartIcon />
+            </button>
+          )}
           <button
             className={refreshing ? 'icon-btn is-spinning' : 'icon-btn'}
             aria-label="Refresh prices"
@@ -415,6 +475,12 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           </button>
         </div>
       </header>
+      {needsSetup && !offlineSince && (
+        <button className="offline-note setup-note" onClick={() => nav.open('budget')}>
+          <i className="dot dot-setup" />
+          {reminder} · <span className="note-action">Set it</span>
+        </button>
+      )}
       {notes}
 
       <div className="columns">
@@ -485,6 +551,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       {nav.layer === 'budget' && summary && (
         <BudgetSheet
           current={summary.budget}
+          period={summary.period}
           onClose={nav.close}
           onSaved={async () => {
             await load()
