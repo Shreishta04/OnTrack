@@ -60,6 +60,8 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Total uses the discounted price**; MRP is shown alongside, with total savings
 - **Spent this month** comes off the budget: `remaining = budget − spent this month − planned`
 - **What fits, by ticking:** tick items on the wish list and a bar slides up with their total, live: *"3 selected · ₹2,947 · ₹53 left this month"* (or *"₹1,947 over"*), compared with the budget minus what's already spent. On **Later**, ticked items are compared with what's left **after** the wish list (*"with your wish list"*), to see what can come back. Nothing changes until a button is pressed: **Mark bought**, **Move to Later**, **Park the rest** (every unticked wish-list item goes to Later), or **Back to wish list**
+- **Ticking works on every tab,** with **Select all** (it turns into **Clear all**). On **Bought** the bar shows what you paid, with **Back to wish list** (an undo for a mistaken purchase) and **Move to Later**; on **All** it shows the total, with **Mark bought**, **To Later** and **To wish list**. Neither shows "left": bought items are already in "spent", so it would count them twice. Items already on the target list are left alone
+- **Mark bought asks first for 5 or more items** (*"Mark 12 items as bought? They'll count as spent this month."*), so Select all plus one stray tap can't empty the wish list
 
 **On the phone (installable app)**
 - **Installs like an app:** iPhone: Safari → Share → *Add to Home Screen*. Android: Chrome → ⋮ → *Install app*. It gets the OnTrack icon (a serif O over a sage line), opens full screen without the browser's bars, and keeps clear of the notch and the home bar
@@ -72,8 +74,9 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 
 **Web app**
 - **Budget card:** one big number, "Left after wish list" (or "Over budget" in clay), a bar showing spent / planned / left, and the three totals underneath. **Edit budget** opens a small form right inside the card
-- **Tabs:** Wish list · Later · Bought · All, with counts. A single underline glides between them and the list fades in
-- **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a round tick box (Wish list and Later), a status badge (Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
+- **Tabs:** Wish list · Later · Bought · All, with counts, in a soft track with a raised **pill** on the one you're on (its own colours in light and dark). The pill glides to the next tab and the list slides in from that side. **On the phone, flick left or right** on the list to change tab; on the laptop, the arrow keys work too
+- **Sort:** Newest first (the default), Oldest first, Price: low to high, Price: high to low. Instant (the app already has every item), and remembered on each device. Items without a price always sit at the bottom. On **Bought**, "newest" means most recently **bought**
+- **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a round tick box, a status badge (Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
 - **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
 - **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone (or added with the browser extension)
 - **When a store won't give a price,** the row says **why** in plain words (*"Amazon showed a bot-check page…"*, *"The store took too long to answer."* instead of raw `curl` errors) and **what to do**: for Amazon, tap *Refresh OnTrack* on the iPhone or share it from there, and the name, photo and price fill in by themselves
@@ -166,7 +169,7 @@ The look was agreed in a clickable mockup before any React was written, so colou
 - **Inspiration:** calm, editorial websites: warm neutrals, a serif for headings, tiny spaced-out uppercase labels, thin dividers with **+** to expand, rounded pill buttons, lots of empty space.
 - **Palette "Linen & Espresso":** linen background, warm-white cards, espresso text, cocoa accent, sand lines. Colour only carries meaning: **sage** means good news (money left, price dropped), **clay** means attention (over budget, errors). The dark version ("Espresso at night") is a warm brown-black, with each colour lightened just enough to stay readable.
 - **Type:** Cormorant Garamond (serif) for the title, headings and empty states; DM Sans for everything else. Numbers use DM Sans with **tabular figures**, so prices line up in a column. The **₹** is drawn smaller and softer than the digits, so "₹557" reads as an amount rather than one long shape.
-- **Motion:** the tab underline glides, lists fade in, rows open smoothly, buttons press slightly. Everything turns off for people who ask their device for reduced motion.
+- **Motion:** the tab pill glides, lists slide in from the side of the tab you moved to, rows open smoothly, buttons press slightly. Everything turns off for people who ask their device for reduced motion.
 - **Decisions from using it:**
   - No duplicate controls: the theme lives only in the header and the budget only on its card. Settings keeps just the API key and server address.
   - Delete needs two taps.
@@ -567,6 +570,33 @@ Most people will use OnTrack on their phone, from the home screen, so this round
 - *Considered:* a priority order (needs a way to rank items, and lower rows still get tags) and "fits on its own" (still a tag on every row, and it ignores everything else planned).
 - *How:* all in the web app. The bar uses the totals `/summary` already sends; bulk buttons send one `PATCH /items/{id}` per item, then reload once. Ticks reset when the tab changes. The server's `fits_budget` field is no longer shown (left in place for now).
 
+### 34. A list that was getting long
+
+With 20-odd items, finding things meant scrolling, and selecting meant tapping every circle.
+
+**1. The order was an accident.**
+- *Cause:* the server sorts by priority, then by id. Nothing sets priority (it's always 0), so every list came out oldest first, which nobody chose.
+- *Fix:* the web app sorts the list itself, since it already has every item, so it's instant and needs nothing from the server: Newest first (now the default), Oldest first, and price both ways. The choice is remembered on each device, like light/dark. Items with no price always go last, or "low to high" would open with a pile of blanks. On **Bought**, "newest" means the date bought, so something saved in August but bought today is on top.
+
+**2. Ticking on Bought and All, without counting twice.**
+- *Decision:* every tab can tick. But a "₹… left" figure only makes sense on Wish list and Later: bought items are already in "spent this month", and All mixes bought with not-yet-bought. So Bought shows *what you paid* and All shows the total, with no "left".
+- *Detail:* on All, *Mark bought* with an already-bought item ticked skips that item (the server would ignore it anyway, but the note has to count only what actually moved).
+
+**3. Select all made one tap dangerous.**
+- *Risk:* Select all, then Mark bought, moves the whole wish list into "spent" in one go.
+- *Fix:* from 5 items up, Mark bought asks first, inside the bar (no pop-up). And Bought can now tick and send things **Back to wish list**, so a mistake takes two taps to undo. *Park the rest* hides when everything is ticked, since there's no rest to park.
+
+**4. Tabs you can see, and swipe.**
+- *Symptom:* the thin underline was easy to miss.
+- *Fix:* a pill in a track. The tabs are as wide as their words ("Wish list 12" needs more room than "All 26"), so the pill measures the active tab and follows it (a `ResizeObserver` re-measures when a count or the font changes) instead of assuming each tab is 25%.
+- *Swiping:* a flick on the list changes tab. It's ignored if it starts within 24px of the screen's edge (iPhone Safari and Android use edge swipes for **Back**), if it's more up-and-down than sideways (that's scrolling), or if it takes longer than 0.8 s (that's reading, not swiping).
+
+**5. The sliding list nudged the page sideways.**
+- *Cause:* the list slides in from 24px to the side, and for a moment stuck out past the edge of a phone screen.
+- *Fix:* `overflow-x: clip` on the page. `clip` rather than `hidden`, because `hidden` turns the page into a scrolling box of its own. Fixed things like the selection bar aren't affected.
+
+**6. A warning about instant reload.** The linter flagged exporting the tab order from `Tabs.tsx`: a component file that also exports other things breaks Vite's instant reload while developing. The tab list moved to its own small file, `tabs.ts`.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -593,7 +623,7 @@ Most people will use OnTrack on their phone, from the home screen, so this round
 Small things I noticed while testing that don't block anything yet:
 
 - **Long amounts overflow the budget card.** A budget in crores (₹1,23,88,844 while testing) pushes the big number and the totals past the card's edge. Planned fix: smaller font for long amounts (tried and working in a test build; parked to keep this branch small).
-- **"WISH LIST" wraps onto two lines** on the phone, while the other tabs fit on one.
+- **The "Planned" dot is squashed into a line** in the budget card on the laptop (the label pushes it narrower). One-line fix for the design pass.
 - **Filling in a stuck link answers `201 Created`** although nothing new is created. Nothing reads the code today.
 - **Test client warning** (`StarletteDeprecationWarning`, wants `httpx2`): harmless for now.
 
@@ -883,24 +913,29 @@ OnTrack/
         ├── places.ts          countries, currencies, time zones; first guesses from the device
         ├── types.ts           shapes of the data the backend sends
         ├── format.ts          store names, short dates, plain-words errors and tips
+        ├── sort.ts            the four sort orders, remembered on this device
+        ├── tabs.ts            the four tabs, left to right
         ├── index.css          design tokens (light + dark), layout, components
         ├── hooks/
         │   ├── useTheme.ts    light / dark / follow the device
-        │   └── usePhone.ts    phone-sized screen? opened from the home screen?
+        │   ├── usePhone.ts    phone-sized screen? opened from the home screen?
+        │   ├── useNewVersion.ts  is a newer build live? (the Update line)
+        │   └── useSwipe.ts    a flick left or right on the list changes tab
         └── components/
             ├── BudgetCard.tsx     budget, bar, totals, in-card budget editing
             ├── Price.tsx          every amount, drawn the same way, in the person's currency
             ├── AddLink.tsx        paste-a-link box
             ├── AddByHand.tsx      name, optional link, price
             ├── AddSheet.tsx       the phone's add sheet, behind the + button
-            ├── SelectionBar.tsx   ticked items: live total, left / over, bulk moves
-            ├── Tabs.tsx           Wish list · Later · Bought · All
+            ├── SelectionBar.tsx   ticked items: live total, left / over, bulk moves, "are you sure?" for 5+
+            ├── ListTools.tsx      Select all / Clear all, and the sort menu
+            ├── Tabs.tsx           Wish list · Later · Bought · All, with the gliding pill
             ├── ItemList.tsx       the rows for the current tab
             ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
             ├── Thumb.tsx          product photo or a letter
             ├── AuthScreen.tsx     log in, sign up with an invite, new password from a reset link
             ├── AccountSheet.tsx   profile, device keys, people and invites (owner), password, log out
-            └── Icons.tsx          refresh, moon, sun, sliders, close
+            └── Icons.tsx          refresh, moon, sun, sliders, close, chevron, check
 └── extension/                 Chrome / Edge extension (plain JavaScript, no build step)
     ├── manifest.json          name, permissions (current tab only, on click), icons
     ├── popup.html             the window that opens from the toolbar icon
@@ -943,6 +978,8 @@ OnTrack/
 - [ ] Myntra / Ajio / Meesho support
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [x] Replace the per-row "Over budget" tags with ticking: a live selection bar (total, left or over) and bulk Mark bought / Move to Later / Park the rest / Back to wish list
+- [x] List tools: sort (newest, oldest, price both ways), Select all and ticking on every tab, a gliding tab pill, swiping between tabs on the phone
+- [ ] A design pass on the whole app ("the vibes"), agreed in mockups first
 - [ ] Flipkart MRP (the struck-through price)
 - [x] Accounts: invite-only sign-up, email + password, own list and budget, device keys for the Shortcuts and extension, reset links, my existing list moved into my account
 - [x] Per-person currency, country and time zone
@@ -1030,3 +1067,10 @@ OnTrack/
 - `feature/pwa`: OnTrack as a phone app. A manifest (name, serif-O icon, full screen, Android **share target**), a hand-written service worker that keeps the app's files for offline (never the server's answers), and the last list saved in the browser for a read-only offline view with "Offline · showing your list from …". On the phone the add forms moved into a sheet behind a **+** button, text boxes went to 16px (no iPhone zoom), content keeps clear of the notch and home bar, "WISH LIST" fits on one line, and the sign-in screen explains installing per phone. Tested the production build in headless Chromium as an iPhone and an Android phone: installed service worker, network cut and page reloaded, Android share after a log-in, log-out wiping the saved copy
 - `feature/selection-bar`: removed the per-row *Fits / Over budget* tags (one running total made nearly every row "over"). Rows on Wish list and Later get a round tick box; ticking slides up a bar with the total and how much is left or over, live (wish list: against budget − spent; Later: also minus the wish list). Buttons: Mark bought, Move to Later, Park the rest, Back to wish list. Tested in headless Chromium against hand-worked numbers (₹1,939 of ₹3,000 → ₹1,061 left; adding ₹1,999 → ₹938 over; Park the rest moved exactly the 2 unticked items; the server's totals matched afterwards)
 - `feature/app-updates`, from testing on a friend's Android phone: the installed app now notices a newer version and offers *Update* (it only pauses in the background, so it kept the old page); the offline line has *Try again*, plus a quiet retry every 20 seconds
+
+**2026-11-10**
+- Found my laptop's `main` was behind GitHub: PR #16 (the update notice) had been merged and deployed on 13 Oct, but never pulled, and Git's "up to date" only compares with its last download. `git pull` fixed it
+- Railway's trial ends tomorrow. The server, the database and the web app all checked out; usage was $0.02 for the whole month. Some people's services paused at the end of the trial, so the plan is *Plans → Downgrade to Free* if it doesn't switch by itself
+- Tested Accounts on the live version: phone login, ticking, a device key that stops working the moment it's removed (checked with `curl.exe`), a friend's new account starting empty, a second account in dollars, and a reset link signing out the old login
+- `feature/list-tools`, from using it: sort (newest first by default, oldest, price both ways; remembered per device; no-price items last; Bought sorted by date bought), Select all and ticking on every tab (Bought shows what you paid and can send things back; All shows the total), Mark bought asks first from 5 items, the tabs got a pill that glides and measures itself, and a flick on the phone changes tab (Challenge 34)
+- Checked in headless Chromium against a fake server with 26 items: 59 checks at 360, 375 and 390 px wide and on a laptop, light and dark, including the exact requests each button sends and that edge swipes, scrolling and slow drags don't change tab

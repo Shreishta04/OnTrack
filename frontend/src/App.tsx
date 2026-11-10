@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react'
 import { Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices, save, saved } from './api'
 import type { Item, Me, Status, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
-import Tabs, { type TabId } from './components/Tabs'
+import Tabs from './components/Tabs'
+import { TAB_ORDER, type TabId } from './tabs'
+import ListTools from './components/ListTools'
+import { saveSort, savedSort, sortItems, type SortId } from './sort'
+import { useSwipe } from './hooks/useSwipe'
 import ItemList from './components/ItemList'
 import type { RowAction } from './components/ItemRow'
 import AccountSheet from './components/AccountSheet'
@@ -115,6 +119,10 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   const [offlineSince, setOfflineSince] = useState<string | null>(null) // set: showing the saved copy
   const [adding, setAdding] = useState(false) // the phone's add sheet
   const [picked, setPicked] = useState<Set<number>>(new Set()) // ticked items: a "what if", nothing saved
+  const [sort, setSort] = useState<SortId>(savedSort) // the list order, remembered on this device
+  // Which way the list slides in when the tab changes: from the right when
+  // moving to a tab further right, from the left when going back.
+  const [enter, setEnter] = useState<'fade-in' | 'slide-from-right' | 'slide-from-left'>('fade-in')
   const theme = useTheme()
   const phone = usePhone()
   const newVersion = useNewVersion()
@@ -252,12 +260,32 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     await load()
   }
 
-  const visible = tab === 'all' ? items : items.filter((i) => i.status === tab)
+  const visible = sortItems(tab === 'all' ? items : items.filter((i) => i.status === tab), sort)
 
   // Ticking belongs to one tab: switching tabs starts fresh.
   function changeTab(next: TabId) {
+    if (next === tab) return
+    setEnter(TAB_ORDER.indexOf(next) > TAB_ORDER.indexOf(tab) ? 'slide-from-right' : 'slide-from-left')
     setTab(next)
     setPicked(new Set())
+  }
+
+  // A flick on the phone: left shows the next tab, right the previous one.
+  // At either end there's nowhere to go, so nothing happens.
+  const swipe = useSwipe(
+    () => {
+      const next = TAB_ORDER[TAB_ORDER.indexOf(tab) + 1]
+      if (next) changeTab(next)
+    },
+    () => {
+      const prev = TAB_ORDER[TAB_ORDER.indexOf(tab) - 1]
+      if (prev) changeTab(prev)
+    },
+  )
+
+  function changeSort(next: SortId) {
+    setSort(next)
+    saveSort(next)
   }
 
   function togglePick(item: Item) {
@@ -271,9 +299,12 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
 
   // Only items still on this tab count (one may have moved meanwhile).
   const pickedItems = visible.filter((i) => picked.has(i.id))
+  const allPicked = visible.length > 0 && pickedItems.length === visible.length
 
   // A button in the selection bar: move the ticked items (or, for "Park the
   // rest", every unticked wish-list item), one request each, then reload once.
+  // Items already on the target list are left alone (on the All tab, "Mark
+  // bought" with a bought item ticked mustn't touch it).
   async function handleBulk(action: BulkAction) {
     if (offlineSince) {
       setNote({ text: 'You’re offline. Changes need a connection.', tone: 'warn' })
@@ -281,13 +312,15 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     }
     const parkRest = action === 'park-rest'
     const status: Status = parkRest ? 'later' : action.move
-    const targets = parkRest ? visible.filter((i) => !picked.has(i.id)) : pickedItems
+    const targets = (parkRest ? visible.filter((i) => !picked.has(i.id)) : pickedItems)
+      .filter((i) => i.status !== status)
     try {
       await Promise.all(targets.map((i) => patchItem(i.id, { status })))
       const n = targets.length
       const things = `${n} ${n === 1 ? 'item' : 'items'}`
       setNote({
-        text: status === 'purchased' ? `Marked ${things} as bought.`
+        text: n === 0 ? 'Those are already there, so nothing moved.'
+          : status === 'purchased' ? `Marked ${things} as bought.`
           : status === 'later' ? `Moved ${things} to Later.` : `Moved ${things} back to your wish list.`,
         tone: 'muted',
       })
@@ -298,7 +331,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     await load()
   }
 
-  const selecting = pickedItems.length > 0 && (tab === 'planned' || tab === 'later')
+  const selecting = pickedItems.length > 0
 
   return (
     <div className={selecting ? 'page has-bar' : 'page'}>
@@ -357,11 +390,21 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           {summary && !phone && <AddByHand onAdded={showNewItem} />}
         </aside>
 
-        <main className="main">
+        {/* the whole list area listens for flicks (on a phone) */}
+        <main className="main" {...swipe}>
           <Tabs active={tab} counts={counts} onChange={changeTab} />
-          {/* key={tab}: a new tab means a fresh list, which replays the fade-in */}
+          {summary && visible.length > 0 && (
+            <ListTools
+              allPicked={allPicked}
+              onSelectAll={() => setPicked(new Set(visible.map((i) => i.id)))}
+              onClearAll={() => setPicked(new Set())}
+              sort={sort}
+              onSort={changeSort}
+            />
+          )}
+          {/* key={tab}: a new tab means a fresh list, which replays the slide-in */}
           {summary && (
-            <div key={tab} className="fade-in">
+            <div key={tab} className={enter}>
               <ItemList items={visible} tab={tab} onAction={handleAction} picked={picked} onPick={togglePick} />
             </div>
           )}
@@ -370,8 +413,9 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
 
       {selecting && summary && (
         <SelectionBar
-          tab={tab as 'planned' | 'later'}
+          tab={tab}
           picked={pickedItems}
+          allPicked={allPicked}
           summary={summary}
           onAction={handleBulk}
           onClear={() => setPicked(new Set())}

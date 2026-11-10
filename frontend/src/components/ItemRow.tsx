@@ -23,7 +23,7 @@ interface ItemRowProps {
   item: Item
   showTag: boolean
   onAction: (item: Item, action: RowAction) => Promise<void>
-  picked?: boolean // undefined: this tab has no ticking (Bought, All)
+  picked?: boolean // undefined: no tick box on this row
   onPick?: () => void
 }
 
