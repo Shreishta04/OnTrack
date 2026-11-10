@@ -15,14 +15,15 @@ interface ItemListProps {
   onAction: (item: Item, action: RowAction) => Promise<void>
   picked: Set<number> // ticked item ids (every tab can tick)
   onPick: (item: Item) => void
+  query?: string // what's typed in the search bar, if it's open
 }
 
-export default function ItemList({ items, tab, onAction, picked, onPick }: ItemListProps) {
+export default function ItemList({ items, tab, onAction, picked, onPick, query }: ItemListProps) {
   if (items.length === 0) {
-    const [title, text] = EMPTY[tab]
+    const [title, text] = query ? ['No matches', `Nothing here matches “${query}”.`] : EMPTY[tab]
     return (
       <div className="empty">
-        <div className="empty-title serif">{title}</div>
+        <div className="empty-title">{title}</div>
         <div className="empty-text">{text}</div>
       </div>
     )

@@ -18,8 +18,16 @@ export default function Thumb({ src, name }: { src: string | null; name: string 
     )
   }
   return (
-    <div className="thumb thumb-letter serif" aria-hidden="true">
+    <div className={`thumb thumb-letter tint-${tintFor(name)}`} aria-hidden="true">
       {name.trim().charAt(0).toUpperCase()}
     </div>
   )
+}
+
+// One of four soft colours for the letter, worked out from the name, so the
+// same item always gets the same colour and neighbours usually differ.
+function tintFor(name: string): number {
+  let sum = 0
+  for (const ch of name) sum += ch.charCodeAt(0)
+  return sum % 4
 }

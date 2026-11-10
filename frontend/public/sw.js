@@ -8,7 +8,10 @@
 // stored here.
 //
 // Rules:
-//   the page itself   network first, the saved copy when offline
+//   the page itself   network first, the saved copy when offline. Every
+//                     address (/, /settings) is the same single page, so the
+//                     one saved copy opens any of them; the app then reads
+//                     the address and shows the right screen.
 //   /assets/…         saved copy first (Vite gives every build new file
 //                     names, so a saved file never goes out of date)
 //   anything else     straight to the network

@@ -75,7 +75,7 @@ export interface AuthResult {
   token: string
 }
 
-// A login or a device key, as listed in Account (never the key itself).
+// A login or a device key, as listed in Settings (never the key itself).
 export interface TokenInfo {
   id: number
   kind: 'session' | 'device'

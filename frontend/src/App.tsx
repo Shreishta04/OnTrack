@@ -9,11 +9,12 @@ import { saveSort, savedSort, sortItems, type SortId } from './sort'
 import { useSwipe } from './hooks/useSwipe'
 import ItemList from './components/ItemList'
 import type { RowAction } from './components/ItemRow'
-import AccountSheet from './components/AccountSheet'
+import SettingsPage from './components/SettingsPage'
+import BudgetSheet from './components/BudgetSheet'
 import AuthScreen, { type AuthMode } from './components/AuthScreen'
 import { MoneyProvider } from './money'
-import { MoonIcon, PlusIcon, RefreshIcon, SlidersIcon, SunIcon } from './components/Icons'
-import { refreshNote } from './format'
+import { CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon } from './components/Icons'
+import { refreshNote, storeName } from './format'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
 import AddByHand from './components/AddByHand'
@@ -21,6 +22,7 @@ import AddSheet from './components/AddSheet'
 import SelectionBar, { type BulkAction } from './components/SelectionBar'
 import { usePhone } from './hooks/usePhone'
 import { useNewVersion } from './hooks/useNewVersion'
+import { useNav } from './hooks/useNav'
 
 // An invite or reset link opens the app as /?invite=CODE or /?reset=CODE.
 function linkFromUrl(): { mode: AuthMode; code: string } | null {
@@ -68,6 +70,7 @@ export default function App() {
     const onSignedOut = () => {
       setSignedIn(false)
       setMe(null)
+      window.history.replaceState(null, '', '/') // after logging in again, start on the list, not Settings
     }
     window.addEventListener(SIGNED_OUT, onSignedOut)
     return () => window.removeEventListener(SIGNED_OUT, onSignedOut)
@@ -113,19 +116,22 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   const [summary, setSummary] = useState<Summary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<TabId>('planned')
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [note, setNote] = useState<{ text: string; tone: 'muted' | 'warn' } | null>(null)
   const [offlineSince, setOfflineSince] = useState<string | null>(null) // set: showing the saved copy
-  const [adding, setAdding] = useState(false) // the phone's add sheet
   const [picked, setPicked] = useState<Set<number>>(new Set()) // ticked items: a "what if", nothing saved
   const [sort, setSort] = useState<SortId>(savedSort) // the list order, remembered on this device
   // Which way the list slides in when the tab changes: from the right when
   // moving to a tab further right, from the left when going back.
   const [enter, setEnter] = useState<'fade-in' | 'slide-from-right' | 'slide-from-left'>('fade-in')
+  const [query, setQuery] = useState('') // what's typed in the search bar
   const theme = useTheme()
   const phone = usePhone()
   const newVersion = useNewVersion()
+  // The page (list or Settings) and the sheet on top of it, kept in the
+  // browser's history so the phone's Back closes them (hooks/useNav.ts).
+  const nav = useNav()
+  const searching = nav.layer === 'search'
 
   // Fetch the latest numbers and items (on opening, after a button press,
   // on coming back). Each good answer is saved; with no connection, the
@@ -254,13 +260,22 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   async function showNewItem(item: Item) {
     setTab('planned')
     if (phone) {
-      setAdding(false)
+      if (nav.layer === 'add') nav.close()
       setNote(addedNote(item))
     }
     await load()
   }
 
-  const visible = sortItems(tab === 'all' ? items : items.filter((i) => i.status === tab), sort)
+  // Search: keep items whose name or store contains what's typed (any
+  // capitals). It searches the tab you're on; the counts stay the full ones.
+  const words = searching ? query.trim().toLowerCase() : ''
+  const matches = (i: Item) => !words || `${i.name} ${storeName(i)}`.toLowerCase().includes(words)
+  const visible = sortItems((tab === 'all' ? items : items.filter((i) => i.status === tab)).filter(matches), sort)
+
+  function openSearch() {
+    setQuery('')
+    nav.open('search')
+  }
 
   // Ticking belongs to one tab: switching tabs starts fresh.
   function changeTab(next: TabId) {
@@ -333,35 +348,10 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
 
   const selecting = pickedItems.length > 0
 
-  return (
-    <div className={selecting ? 'page has-bar' : 'page'}>
-      <header className="header">
-        <div>
-          <div className="brand">OnTrack</div>
-          <div className="eyebrow">{me ? `${me.name.split(' ')[0]}’s wish list` : 'Your wish list, on budget'}</div>
-        </div>
-        <div className="header-actions">
-          <button
-            className={refreshing ? 'icon-btn is-spinning' : 'icon-btn'}
-            aria-label="Refresh prices"
-            title="Refresh prices"
-            disabled={refreshing || !!offlineSince}
-            onClick={handleRefresh}
-          >
-            <RefreshIcon />
-          </button>
-          <button
-            className="icon-btn"
-            aria-label={theme.isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            onClick={() => theme.setPref(theme.isDark ? 'light' : 'dark')}
-          >
-            {theme.isDark ? <SunIcon /> : <MoonIcon />}
-          </button>
-          <button className="icon-btn" aria-label="Open account" onClick={() => setSettingsOpen(true)} disabled={!me}>
-            <SlidersIcon />
-          </button>
-        </div>
-      </header>
+  // The lines under the header: offline, a new version, what just happened.
+  // Shown on both pages.
+  const notes = (
+    <>
       {offlineSince && (
         <button className="offline-note" role="status" onClick={retryNow} disabled={retrying}>
           <i className="dot dot-offline" />
@@ -380,18 +370,82 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           {note.text}
         </p>
       )}
+    </>
+  )
+
+  if (nav.page === 'settings' && me) {
+    return (
+      <SettingsPage
+        me={me}
+        summary={summary}
+        theme={theme}
+        notes={notes}
+        onBack={nav.back}
+        onMe={(updated) => {
+          onMe(updated)
+          load() // "this month" may have moved with a new time zone
+        }}
+        onBudgetSaved={load}
+        onServerChanged={load}
+      />
+    )
+  }
+
+  const pageClass = ['page', selecting && 'has-bar', searching && 'is-searching'].filter(Boolean).join(' ')
+
+  return (
+    <div className={pageClass}>
+      <header className="header">
+        <div className="brand">OnTrack</div>
+        <div className="header-actions">
+          <button className="icon-btn" aria-label="Search your list" onClick={openSearch} disabled={!summary}>
+            <SearchIcon />
+          </button>
+          <button
+            className={refreshing ? 'icon-btn is-spinning' : 'icon-btn'}
+            aria-label="Refresh prices"
+            title="Refresh prices"
+            disabled={refreshing || !!offlineSince}
+            onClick={handleRefresh}
+          >
+            <RefreshIcon />
+          </button>
+          <button className="icon-btn" aria-label="Settings" onClick={() => nav.go('settings')} disabled={!me}>
+            <GearIcon />
+          </button>
+        </div>
+      </header>
+      {notes}
 
       <div className="columns">
         <aside className="side">
           {error && <p className="notice notice-error">{error}</p>}
           {!error && !summary && <p className="notice">Loading…</p>}
-          {summary && <BudgetCard summary={summary} onBudgetSaved={load} />}
+          {summary && <BudgetCard summary={summary} onEdit={() => nav.open('budget')} />}
           {summary && !phone && <AddLink onAdded={showNewItem} />}
           {summary && !phone && <AddByHand onAdded={showNewItem} />}
         </aside>
 
         {/* the whole list area listens for flicks (on a phone) */}
         <main className="main" {...swipe}>
+          {searching && (
+            <div className="search-bar fade-in" role="search">
+              <SearchIcon />
+              <input
+                className="search-input"
+                type="search"
+                aria-label="Search your list"
+                placeholder="Search by name or store"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Escape' && nav.close()}
+                autoFocus
+              />
+              <button className="icon-btn search-close" aria-label="Close search" onClick={nav.close}>
+                <CloseIcon />
+              </button>
+            </div>
+          )}
           <Tabs active={tab} counts={counts} onChange={changeTab} />
           {summary && visible.length > 0 && (
             <ListTools
@@ -405,7 +459,8 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           {/* key={tab}: a new tab means a fresh list, which replays the slide-in */}
           {summary && (
             <div key={tab} className={enter}>
-              <ItemList items={visible} tab={tab} onAction={handleAction} picked={picked} onPick={togglePick} />
+              <ItemList items={visible} tab={tab} onAction={handleAction} picked={picked} onPick={togglePick}
+                query={words ? query.trim() : undefined} />
             </div>
           )}
         </main>
@@ -421,22 +476,20 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           onClear={() => setPicked(new Set())}
         />
       )}
-      {phone && summary && !offlineSince && !selecting && (
-        <button className="fab" aria-label="Add something" onClick={() => setAdding(true)}>
+      {phone && summary && !offlineSince && !selecting && !searching && (
+        <button className="fab" aria-label="Add something" onClick={() => nav.open('add')}>
           <PlusIcon />
         </button>
       )}
-      {adding && <AddSheet onClose={() => setAdding(false)} onAdded={showNewItem} />}
-
-      {settingsOpen && me && (
-        <AccountSheet
-          me={me}
-          onClose={() => setSettingsOpen(false)}
-          onChanged={(updated) => {
-            onMe(updated)
-            load() // "this month" may have moved with a new time zone
+      {nav.layer === 'add' && <AddSheet onClose={nav.close} onAdded={showNewItem} />}
+      {nav.layer === 'budget' && summary && (
+        <BudgetSheet
+          current={summary.budget}
+          onClose={nav.close}
+          onSaved={async () => {
+            await load()
+            nav.close()
           }}
-          onServerChanged={load}
         />
       )}
     </div>

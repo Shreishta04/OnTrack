@@ -35,11 +35,11 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 **Accounts**
 - **Invite-only:** I make a one-time invite link in the app (valid 7 days) and send it myself; nobody can sign up without one. The very first account uses the server's `ONTRACK_API_KEY` as its invite, so nobody can grab the owner account after a deploy
 - **Everyone has their own list and budget:** items, links, prices and purchases belong to one person. Asking for someone else's item answers *not found*, for every route
-- **Own currency, country and time zone:** chosen at sign-up (guessed from the device) and changeable in Account. Prices show as `₹1,23,456` in India and `$120.50` in the US; "spent this month" follows each person's own calendar. No currency conversion: prices are shown as the store gave them
+- **Own currency, country and time zone:** chosen at sign-up (guessed from the device) and changeable in **Settings → Region**. Prices show as `₹1,23,456` in India and `$120.50` in the US; "spent this month" follows each person's own calendar. No currency conversion: prices are shown as the store gave them
 - **The same product on two lists:** duplicate checks are per person, so two people can save the same lipstick, but one person still can't save it twice
-- **A key per device:** each Shortcut and the browser extension gets its own key from **Account → Devices**, shown once and removable if a phone is lost, without touching anything else
+- **A key per device:** each Shortcut and the browser extension gets its own key from **Settings → Shortcuts and extension**, shown once and removable if a phone is lost, without touching anything else
 - **Email + password**, hashed with scrypt; a wrong email and a wrong password get the same answer; logins are rate-limited
-- **Forgot the password?** I make a one-time reset link (valid 2 days) in **Account → People**. Using it signs out old logins but keeps device keys, so the Shortcuts don't break. Changing a password signs out every other login
+- **Forgot the password?** I make a one-time reset link (valid 2 days) in **Settings → People and invites**. Using it signs out old logins but keeps device keys, so the Shortcuts don't break. Changing a password signs out every other login
 
 **Saving items**
 - **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet
@@ -73,17 +73,20 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - The sign-in screen says how to install, per phone. On iPhone the home-screen app keeps **its own login**, separate from Safari, so it says to log in once more there
 
 **Web app**
-- **Budget card:** one big number, "Left after wish list" (or "Over budget" in clay), a bar showing spent / planned / left, and the three totals underneath. **Edit budget** opens a small form right inside the card
+- **Budget card:** a dark espresso card with one big number, *"Left this month · after your wish list"* (or *"Over budget"*), a **ring** showing how the budget splits into spent / planned / left with the percentage left in the middle, and the three totals underneath. Big amounts (lakhs, crores) shrink to fit on one line. **Tap the card** to change the budget (also in Settings)
 - **Tabs:** Wish list · Later · Bought · All, with counts, in a soft track with a raised **pill** on the one you're on (its own colours in light and dark). The pill glides to the next tab and the list slides in from that side. **On the phone, flick left or right** on the list to change tab; on the laptop, the arrow keys work too
 - **Sort:** Newest first (the default), Oldest first, Price: low to high, Price: high to low. Instant (the app already has every item), and remembered on each device. Items without a price always sit at the bottom. On **Bought**, "newest" means most recently **bought**
-- **Expandable rows:** product photo (or the name's first letter when there isn't one), name, store, a round tick box, a status badge (Needs a price / Parked / Bought), price with MRP struck through. Tap **+** for details: price now, lowest seen, date saved, how much it has dropped, a link to the store, and the actions
+- **Item cards:** each item is its own card: a round tick box, the product photo (or its first letter on one of four soft colours), name, store and date saved (or Parked / Bought), and the price. Under the price: a green **"↓ ₹500"** pill when it has dropped since saving, otherwise the MRP struck through; with no price yet, a clay **"Needs a price"** pill instead. Tap a card for details: price now, lowest seen, a link to the store, and the actions
+- **Search:** the magnifier in the header opens a search bar that filters the tab you're on by name or store as you type (any capitals). On the phone the budget card steps aside so the results sit right under the bar. ✕, Escape or the phone's Back closes it
 - **Actions in every row:** Mark bought, Move to Later / Back to wish list, Undo purchase, Delete (two taps). Each one calls the API and reloads, so the budget card and counts always match the server
 - **Paste a link** to add an item from the laptop, with a note that Amazon works best shared from the iPhone (or added with the browser extension)
 - **When a store won't give a price,** the row says **why** in plain words (*"Amazon showed a bot-check page…"*, *"The store took too long to answer."* instead of raw `curl` errors) and **what to do**: for Amazon, tap *Refresh OnTrack* on the iPhone or share it from there, and the name, photo and price fill in by themselves
 - **Placeholder letters:** items without a photo show their first letter; an item still named after its link shows the **store's** letter (A for Amazon) instead of "H" from *https*
 - **Refresh button (↻)** in the header: the server re-checks every store except Amazon (the iPhone does Amazon), the icon spins while it works, and a short note says what happened (*"Checked 4 · 1 price dropped · Amazon refreshes from your iPhone"*, or *"All prices were checked in the last hour"*)
 - **Stays current by itself:** coming back to the app (from Shortcuts, another app or another tab) reloads the list, so prices the iPhone refreshed show up without a manual reload
-- **Light and dark mode:** follows the device until you tap the moon/sun button, then remembers your choice
+- **Settings, as its own page** (`/settings`, the gear in the header): profile, **Appearance** (Light · Dark · Auto, where Auto follows the phone), monthly budget, region (currency, country, time zone), change password, **Shortcuts and extension** (device keys), **People and invites** (owner only), log out. Each row opens its editor underneath it
+- **Back works like an app:** the phone's Back button or swipe closes an open sheet (add, budget) or the search, and returns from Settings to the list. iPhone's home-screen app has no back swipe of its own, so Settings gets one: swipe in from the left edge
+- **Light and dark mode:** designed for both, not just inverted (in dark mode the budget card is a lifted warm brown and the active tab and + button turn cream). Auto follows the device; the choice is remembered
 - **Works on laptop and phone:** two columns on a laptop, one on a phone, with no separate phone code
 
 **Prices**
@@ -122,7 +125,7 @@ The layers are kept separate on purpose. `services.py` doesn't know about HTTP, 
 
 ### Frontend
 
-The web app is a React + TypeScript single page, built with Vite. Each part of the screen is a **component** in its own file (`BudgetCard`, `Tabs`, `ItemRow`, `AddLink`, `AuthScreen`, `AccountSheet`, …). Three decisions shape it:
+The web app is a React + TypeScript single page, built with Vite. Each part of the screen is a **component** in its own file (`BudgetCard`, `Tabs`, `ItemRow`, `AddLink`, `AuthScreen`, `SettingsPage`, …). Three decisions shape it:
 
 - **The server is the single source of truth.** After any button press the app calls the API and then reloads `/summary`, instead of recalculating budgets in the browser. The backend already computes spent-this-month, what fits and purchase prices (and is tested), so the screen can never drift from the database.
 - **One place talks to the server.** `api.ts` adds this browser's login token, reads the JSON and turns failures into plain sentences ("Can't reach the server…"). Components only call functions like `getSummary()` or `patchItem()`. A `401` anywhere means the login has ended: `api.ts` forgets the token and the app goes back to the sign-in screen, clearing the list from view.
@@ -164,14 +167,15 @@ Deleting an item removes its links, price history and status history with it (`O
 
 ## Design
 
-The look was agreed in a clickable mockup before any React was written, so colours, spacing and wording could change cheaply.
+The look was agreed in a clickable mockup before any React was written, so colours, spacing and wording could change cheaply. The second version (November) was chosen the same way: three directions side by side on a design canvas (*A · Linen, refined*, *B · Espresso card*, *C · Gallery*), in light and dark, before any code. I picked **B**, plus C's search button.
 
 - **Inspiration:** calm, editorial websites: warm neutrals, a serif for headings, tiny spaced-out uppercase labels, thin dividers with **+** to expand, rounded pill buttons, lots of empty space.
 - **Palette "Linen & Espresso":** linen background, warm-white cards, espresso text, cocoa accent, sand lines. Colour only carries meaning: **sage** means good news (money left, price dropped), **clay** means attention (over budget, errors). The dark version ("Espresso at night") is a warm brown-black, with each colour lightened just enough to stay readable.
-- **Type:** Cormorant Garamond (serif) for the title, headings and empty states; DM Sans for everything else. Numbers use DM Sans with **tabular figures**, so prices line up in a column. The **₹** is drawn smaller and softer than the digits, so "₹557" reads as an amount rather than one long shape.
-- **Motion:** the tab pill glides, lists slide in from the side of the tab you moved to, rows open smoothly, buttons press slightly. Everything turns off for people who ask their device for reduced motion.
+- **Espresso card (v2):** the budget is the hero: a dark card with a ring, on both light and dark backgrounds. In dark mode it stays dark (a lifted brown, `#342922` on `#1C1714`, cream text at 12.6:1 contrast) rather than turning light, which would glare at night. Active things (the tab pill, primary buttons, the + button) are espresso in light mode and cream in dark mode.
+- **Type:** Cormorant Garamond (serif) for the OnTrack name and the sign-in screen; DM Sans for everything else, bold for amounts. Numbers use DM Sans with **tabular figures**, so prices line up in a column. The **₹** is drawn smaller and softer than the digits, so "₹557" reads as an amount rather than one long shape.
+- **Motion:** the tab pill glides, lists slide in from the side of the tab you moved to, Settings slides in from the right, rows open smoothly, buttons press slightly. Everything turns off for people who ask their device for reduced motion.
 - **Decisions from using it:**
-  - No duplicate controls: the theme lives only in the header and the budget only on its card. Settings keeps just the API key and server address.
+  - No duplicate controls, with one deliberate exception: the theme and everything about the account live on the Settings page; the budget is in Settings **and** one tap away on its card, because it's the thing you change most.
   - Delete needs two taps.
   - The budget label reads "Left after wish list", not "Left this month", because it subtracts what you *plan* to buy.
   - A "below MRP" savings line was tried and removed for being confusing.
@@ -597,11 +601,41 @@ With 20-odd items, finding things meant scrolling, and selecting meant tapping e
 
 **6. A warning about instant reload.** The linter flagged exporting the tab order from `Tabs.tsx`: a component file that also exports other things breaks Vite's instant reload while developing. The tab list moved to its own small file, `tabs.ts`.
 
+### 35. A new look, a second page, and the phone's Back button
+
+**1. Choosing the look before building it.**
+- *How:* three directions as real phone-sized mockups on a design canvas (refined, bold espresso card, photo grid), then the chosen one refined in light and dark with a Settings page, before any code. B won; C contributed the search button.
+- *Considered:* C's photo grid looked the most fun, but it shows fewer items per screen, makes prices smaller to scan, and only shines with real photos (stuck items have none).
+
+**2. Should the dark card turn light in dark mode?**
+- *Decision:* no. Dark mode exists to avoid glare, and a light card would be the brightest thing on the screen. "Lifted" in a dark design means a few shades lighter, not light: `#342922` on a `#1C1714` page, with a thin border. Cream text on it measures 12.6:1 (4.5:1 is the minimum).
+
+**3. A second page in a one-page app.**
+- *How:* React still draws everything from one `index.html`; the address decides the screen. `useNav` records each page and sheet in the browser's history (`pushState`), so `/settings` is a real address. I wrote that small switcher instead of adding React Router: two pages don't need a library, and it's code I can read in one go.
+- *Two things outside the app:* opening or refreshing `/settings` directly asks Vercel for a file that doesn't exist, so `vercel.json` sends every address to `index.html` (real files like `/assets/…` are still served first). The service worker needed nothing: offline, any address gets the one saved page, which then reads the address itself.
+
+**4. The phone's Back button.**
+- *Goal:* Back should close an open sheet or the search, and return from Settings, instead of leaving the app.
+- *How:* opening a page or sheet adds one history entry; every close (✕, saving, Escape) goes back one entry, exactly like the Back button, so the two can never disagree. Opened straight on `/settings` there's nothing to go back to, so the entry is swapped for the list instead.
+- *A trap avoided:* React's development mode runs effects twice, so "push a history entry when a sheet appears" in an effect would push two and close one by itself. The pushes happen in the click handlers instead.
+- *iPhone:* installed web apps on iPhone have **no** back swipe, so Settings adds its own (swipe in from the left edge), switched on only in the installed app (`navigator.standalone`), where it can't clash with Safari's.
+
+**5. Big numbers broke in the middle.**
+- *Symptom:* in the laptop's narrow side column "₹3,605" wrapped to "₹3,60 / 5"; on a 360px phone a crore budget became "12,34, / 45,394".
+- *Fix:* each amount shrinks to fit on one line. CSS *container units* (`cqi`) let an element size its text by the width of its own box: the font size is that width divided by the number of characters (`--chars`, set by React). Phones older than iOS 16 ignore the line and keep a fixed size. This also closed the old "long amounts overflow the budget card" note.
+
+**6. Deleting old styles took a shared one with it.**
+- *Symptom:* the coloured dots beside Spent / Planned / Budget vanished (and the offline notice's dot with them).
+- *Cause:* the `.dot` rule lived in the old budget card's section, which I removed.
+- *Fix:* back as a shared rule; the browser test now checks the dots are 8px wide. Found by looking at the screenshots, not by the tests, which is why I check both.
+
+**7. Drawing the ring.** Each arc is a dashed circle: a dash as long as the arc, a gap as long as the rest, and an offset for where it starts. Rounded ends stick out by half the line's thickness, so each dash is drawn that much shorter. The linter flagged the running position being changed while React draws, so the arithmetic moved into a plain function (`arcsFor`).
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
 - **The owner key is a master key:** `ONTRACK_API_KEY` still acts as my account. Once every Shortcut and the extension use device keys, it can be changed to a new random value that's only used as the first invite.
-- **Logins don't expire** until you log out, change the password, or a reset is used. Device keys can be removed in Account.
+- **Logins don't expire** until you log out, change the password, or a reset is used. Device keys can be removed in Settings.
 - **No emails:** invite and reset links are copied and sent by hand. Fine for a handful of people.
 - **Offline is read-only:** changes need a connection (the app says so instead of failing).
 - **Sharing from Android uses the server's download,** so Amazon may still come back without a price there (Amazon blocks servers); add it by hand. Only the iPhone Shortcut and the extension download the page on the device.
@@ -609,6 +643,8 @@ With 20-odd items, finding things meant scrolling, and selecting meant tapping e
 - **Rate limits live in memory:** they reset when the server restarts, and they'd need a shared store if OnTrack ever ran on several servers at once.
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
+- **Search** looks at names and store names, on the tab you're on; it doesn't search notes or other tabs at once (use the All tab for that).
+- **Shrink-to-fit amounts need iOS 16 or newer** (2022); older iPhones show amounts at a fixed size, which can wrap for very large numbers.
 - **The extension is loaded by hand** (Developer mode → Load unpacked), not from the Chrome Web Store, so it shows a small "unpacked" badge, and after editing its files it needs a reload in `chrome://extensions`.
 - **Flipkart sizes and colours count as one item** (they share one product code). Lipstick shades on Flipkart may merge too.
 - **A link that never gets a price** (for example a removed product, or a store that blocks the server) is tried again on **every** ↻, since links without a price skip the one-hour wait. Cheap, and the rate limits cap it, but worth knowing; delete the item or add it by hand.
@@ -622,8 +658,6 @@ With 20-odd items, finding things meant scrolling, and selecting meant tapping e
 
 Small things I noticed while testing that don't block anything yet:
 
-- **Long amounts overflow the budget card.** A budget in crores (₹1,23,88,844 while testing) pushes the big number and the totals past the card's edge. Planned fix: smaller font for long amounts (tried and working in a test build; parked to keep this branch small).
-- **The "Planned" dot is squashed into a line** in the budget card on the laptop (the label pushes it narrower). One-line fix for the design pass.
 - **Filling in a stuck link answers `201 Created`** although nothing new is created. Nothing reads the code today.
 - **Test client warning** (`StarletteDeprecationWarning`, wants `httpx2`): harmless for now.
 
@@ -678,7 +712,7 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 
 **Pointing the phone and the extension at it**
 - iPhone: Safari → the web app → Share → **Add to Home Screen** → open the icon → log in (the home-screen app keeps its own login). Android: Chrome → ⋮ → **Install app** → log in
-- **Account → Devices → New key** once per device (e.g. "iPhone Shortcuts", "Laptop extension"); each key is shown once
+- **Settings → Shortcuts and extension → New key** once per device (e.g. "iPhone Shortcuts", "Laptop extension"); each key is shown once
 - **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html`, header `X-API-Key` = the iPhone's device key
 - **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html`, with the device key in both
 - Extension → sliders: server and app as above, the laptop's device key in *API key*. Chrome asks once for permission to reach the server. Clear each field completely (Ctrl+A) before pasting
@@ -844,7 +878,7 @@ On the laptop, an Amazon price can also be refreshed with the browser extension:
 
 1. Open `chrome://extensions` (or `edge://extensions`), turn on **Developer mode**, click **Load unpacked** and pick the `extension` folder.
 2. Pin it: the puzzle-piece icon in the toolbar → 📌 next to OnTrack.
-3. Click the OnTrack icon. The first time, it asks for the **server** (`http://localhost:8000`), the **API key** (a device key from the web app's **Account → Devices → New key**) and the **app address** (`http://localhost:5173`). The sliders button changes them later.
+3. Click the OnTrack icon. The first time, it asks for the **server** (`http://localhost:8000`), the **API key** (a device key from the web app's **Settings → Shortcuts and extension → New key**) and the **app address** (`http://localhost:5173`). The sliders button changes them later.
 4. On a product page: **Add to OnTrack**. On a product already saved: **Update price**.
 
 After editing any file in `extension/`, click ↻ on its card in `chrome://extensions`.
@@ -904,7 +938,7 @@ OnTrack/
     │   ├── sw.js                  service worker: keeps the app's files for offline
     │   └── icon-*.png, apple-touch-icon.png, favicon-64.png   the serif O icon
     ├── .env.local             dev server address (git-ignored)
-    ├── vercel.json            security headers for the deployed web app
+    ├── vercel.json            security headers; every address goes to the app (for /settings)
     └── src/
         ├── main.tsx           entry point: draws <App /> into the page; starts the service worker (built app only)
         ├── App.tsx            sign-in screen or the list; loads /summary, owns the tab, handles button presses
@@ -920,9 +954,10 @@ OnTrack/
         │   ├── useTheme.ts    light / dark / follow the device
         │   ├── usePhone.ts    phone-sized screen? opened from the home screen?
         │   ├── useNewVersion.ts  is a newer build live? (the Update line)
-        │   └── useSwipe.ts    a flick left or right on the list changes tab
+        │   ├── useSwipe.ts    a flick left or right on the list changes tab
+        │   └── useNav.ts      the page (list or Settings) and open sheet, kept in history so Back works
         └── components/
-            ├── BudgetCard.tsx     budget, bar, totals, in-card budget editing
+            ├── BudgetCard.tsx     the espresso card: what's left, the ring, the three totals
             ├── Price.tsx          every amount, drawn the same way, in the person's currency
             ├── AddLink.tsx        paste-a-link box
             ├── AddByHand.tsx      name, optional link, price
@@ -934,8 +969,10 @@ OnTrack/
             ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
             ├── Thumb.tsx          product photo or a letter
             ├── AuthScreen.tsx     log in, sign up with an invite, new password from a reset link
-            ├── AccountSheet.tsx   profile, device keys, people and invites (owner), password, log out
-            └── Icons.tsx          refresh, moon, sun, sliders, close, chevron, check
+            ├── SettingsPage.tsx   the /settings page: profile, appearance, budget, region, password, device keys, people (owner), log out
+            ├── BudgetEditor.tsx   the budget form (used by the sheet and by Settings)
+            ├── BudgetSheet.tsx    the sheet that opens when you tap the budget card
+            └── Icons.tsx          small line icons (search, gear, back, refresh, sun, moon, …)
 └── extension/                 Chrome / Edge extension (plain JavaScript, no build step)
     ├── manifest.json          name, permissions (current tab only, on click), icons
     ├── popup.html             the window that opens from the toolbar icon
@@ -979,7 +1016,10 @@ OnTrack/
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [x] Replace the per-row "Over budget" tags with ticking: a live selection bar (total, left or over) and bulk Mark bought / Move to Later / Park the rest / Back to wish list
 - [x] List tools: sort (newest, oldest, price both ways), Select all and ticking on every tab, a gliding tab pill, swiping between tabs on the phone
-- [ ] A design pass on the whole app ("the vibes"), agreed in mockups first
+- [x] A design pass on the whole app ("the vibes"), agreed in mockups first: espresso budget card with a ring, item cards, light and dark designed separately
+- [x] Search your list by name or store
+- [x] Settings as its own page (`/settings`), with the phone's Back working everywhere
+- [ ] Analytics: what kinds of things I spend on (needs a category per item, picked or guessed)
 - [ ] Flipkart MRP (the struck-through price)
 - [x] Accounts: invite-only sign-up, email + password, own list and budget, device keys for the Shortcuts and extension, reset links, my existing list moved into my account
 - [x] Per-person currency, country and time zone
@@ -1074,3 +1114,6 @@ OnTrack/
 - Tested Accounts on the live version: phone login, ticking, a device key that stops working the moment it's removed (checked with `curl.exe`), a friend's new account starting empty, a second account in dollars, and a reset link signing out the old login
 - `feature/list-tools`, from using it: sort (newest first by default, oldest, price both ways; remembered per device; no-price items last; Bought sorted by date bought), Select all and ticking on every tab (Bought shows what you paid and can send things back; All shows the total), Mark bought asks first from 5 items, the tabs got a pill that glides and measures itself, and a flick on the phone changes tab (Challenge 34)
 - Checked in headless Chromium against a fake server with 26 items: 59 checks at 360, 375 and 390 px wide and on a laptop, light and dark, including the exact requests each button sends and that edge swipes, scrolling and slow drags don't change tab
+- `feature/look`, the design pass: three directions mocked on a design canvas, then B (*Espresso card*) refined in light and dark with a Settings page. Built it: new colour tokens for both modes, the espresso budget card with a ring (tap it to change the budget), item cards with tinted letters and price-drop / needs-a-price pills, a search bar, and Settings as its own page at `/settings`
+- Made the phone's Back work everywhere: sheets, search and Settings are history entries (`useNav`), Vercel sends every address to the app, and the iPhone's home-screen app gets its own edge swipe on Settings
+- Found by looking at screenshots: amounts breaking mid-number in narrow spaces (now shrink to fit with container units) and the budget dots gone with the old styles (restored, now tested). 71 new browser checks plus the 59 list checks, phone and laptop, light and dark (Challenge 35)
