@@ -15,7 +15,7 @@ npm run dev        # starts the app at http://localhost:5173
 
 Open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`: the backend's CORS setting only allows `localhost`.
 
-**First time on a database:** tap *Have an invite? Create your account* and use `ONTRACK_API_KEY` from `backend/.env` as the invite code. That first account is the owner and gets everything already saved. Others join from an invite link made in **Account → People**.
+**First time on a database:** tap *Have an invite? Create your account* and use `ONTRACK_API_KEY` from `backend/.env` as the invite code. That first account is the owner and gets everything already saved. Others join from an invite link made in **Settings → People and invites**.
 
 ### Deployed version
 
@@ -33,7 +33,7 @@ The lone `--` passes `--host` through npm to Vite. Then:
    ```
    ONTRACK_CORS_ORIGINS=http://localhost:5173,http://<laptop IP>:5173
    ```
-2. On the phone, open the **Network** URL (`http://<laptop IP>:5173`) and, on the sign-in screen, open **Server** and set it to `http://<laptop IP>:8000` (later: **Account → Server address**). Port **5173** is the app (Vite); port **8000** is the data (uvicorn), so the server setting always ends in `:8000`. Settings are saved per address, so a new network (new IP) means entering it again.
+2. On the phone, open the **Network** URL (`http://<laptop IP>:5173`) and, on the sign-in screen, open **Server** and set it to `http://<laptop IP>:8000` (later: **Settings → Server address**, at the bottom). Port **5173** is the app (Vite); port **8000** is the data (uvicorn), so the server setting always ends in `:8000`. Settings are saved per address, so a new network (new IP) means entering it again.
 3. First time on a network: Windows must treat the Wi-Fi as **Private**, and allow ports 5173 and 8000 (see the main README, "Using the iPhone Shortcut with the local server").
 
 The first load on the phone can be slow in development, because Vite sends the app as many small files. A production build (`npm run build`) doesn't have this.
@@ -46,7 +46,7 @@ Create `frontend/.env.local` (git-ignored, never committed):
 VITE_API_URL=http://127.0.0.1:8000
 ```
 
-Only variables starting with `VITE_` reach the code. Vite copies them **into the built app**, so never put a key here. A server address saved in the app (sign-in screen → *Server*, or **Account**) is stored in the browser and takes priority over `.env.local`. An old `VITE_API_KEY` line isn't read any more and can go.
+Only variables starting with `VITE_` reach the code. Vite copies them **into the built app**, so never put a key here. A server address saved in the app (sign-in screen → *Server*, or **Settings**) is stored in the browser and takes priority over `.env.local`. An old `VITE_API_KEY` line isn't read any more and can go.
 
 ## Scripts
 
@@ -77,9 +77,12 @@ src/
 │   ├── useTheme.ts    light / dark / follow the device, remembered in the browser
 │   ├── usePhone.ts    phone-sized screen (the + button layout)? opened from the home screen?
 │   ├── useNewVersion.ts  is a newer build live? (shows the Update line)
-│   └── useSwipe.ts    a flick left or right on the list changes tab (ignores edge swipes, scrolling, slow drags)
+│   ├── useSwipe.ts    a flick left or right on the list changes tab (ignores edge swipes, scrolling, slow drags)
+│   └── useNav.ts      which page (list or /settings) and which sheet is open, kept in history so Back works
 └── components/
-    ├── BudgetCard.tsx     big "left" number, bar, totals, in-card budget editing
+    ├── BudgetCard.tsx     the espresso card: what's left, the ring (spent / planned / left), the totals; tap to edit
+    ├── BudgetEditor.tsx   the budget form, shared by the sheet and Settings
+    ├── BudgetSheet.tsx    the sheet that opens when you tap the budget card
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
     ├── AddLink.tsx        paste-a-link box
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
@@ -91,15 +94,25 @@ src/
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
-    ├── AccountSheet.tsx   profile (currency, country, time zone), device keys, people + invites (owner), password, log out
-    └── Icons.tsx          small line icons (refresh, moon, sun, sliders, close, chevron, check)
+    ├── SettingsPage.tsx   /settings: profile, appearance, budget, region, password, device keys, people (owner), log out
+    └── Icons.tsx          small line icons (search, gear, back, refresh, sun, moon, close, chevron, …)
 ```
 
-**Signing in:** `App` shows `AuthScreen` when this browser has no login token, or when the address has `?invite=…` or `?reset=…` (the links made in Account). After signing in, the code is removed from the address bar so a reload doesn't reuse it. Any `401` later (logged out elsewhere, password changed) makes `api.ts` forget the token and fire a `ontrack:signed-out` event, and `App` goes back to the sign-in screen, clearing the list from view.
+**Signing in:** `App` shows `AuthScreen` when this browser has no login token, or when the address has `?invite=…` or `?reset=…` (the links made in Settings). After signing in, the code is removed from the address bar so a reload doesn't reuse it. Any `401` later (logged out elsewhere, password changed) makes `api.ts` forget the token and fire a `ontrack:signed-out` event, and `App` goes back to the sign-in screen, clearing the list from view.
 
 **How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits. It also reloads when the page becomes visible again (`visibilitychange`), so changes made elsewhere, like the iPhone's Refresh OnTrack, show up without a manual reload.
 
 **Sorting and ticking happen in the browser:** `/summary` already holds every item, so `sortItems()` reorders a copy for the current tab, and ticks are just a set of ids in `App`'s state (a "what if"). Only the bar's buttons talk to the server: one `PATCH /items/{id}` per item, skipping items already on the target list, then one reload.
+
+## Pages and the Back button
+
+There are two pages, `/` (the list) and `/settings`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
+
+- Opening a page or a sheet adds one history entry (`history.pushState`); closing it (✕, Save, Escape) goes back one entry, exactly what the phone's Back does. So the phone's Back button or swipe closes a sheet, and returns from Settings to the list.
+- The pushes happen in click handlers, never in effects: React's development mode runs effects twice, which would push two entries.
+- Opened straight on `/settings` (a refresh, a bookmark), there's no entry to go back to, so Back swaps the entry for the list instead of leaving the app.
+- `vercel.json` sends every address to `index.html`, so `/settings` loads on a refresh; Vite's dev server and `npm run preview` already do this.
+- iPhone's home-screen app has no back swipe, so `SettingsPage` adds a left-edge swipe when `navigator.standalone` is true (never in Safari, which has its own).
 
 ## Phone app (PWA)
 
