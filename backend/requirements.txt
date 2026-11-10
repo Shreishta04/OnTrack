@@ -1,11 +1,13 @@
-curl_cffi
-beautifulsoup4
-lxml
-fastapi
-uvicorn[standard]
-python-dotenv
-pytest
-httpx
-python-multipart
-psycopg[binary]
-tzdata
+# What the server needs to run (Railway installs this file).
+# Exact versions, so a new release of any of them can't quietly break a
+# deploy: these are the versions the tests last passed with. To upgrade, change
+# a number, run the tests (laptop + GitHub Actions), then deploy.
+curl_cffi==0.17.0
+beautifulsoup4==4.15.0
+lxml==6.1.3
+fastapi==0.162.2
+uvicorn[standard]==0.54.0
+python-dotenv==1.2.4
+python-multipart==0.0.33
+psycopg[binary]==3.3.8
+tzdata==2026.6

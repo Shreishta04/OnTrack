@@ -1,0 +1,4 @@
+# Only for running the tests (laptop and GitHub Actions); the server doesn't need these.
+-r requirements.txt
+pytest==9.2.0
+httpx==0.28.1
