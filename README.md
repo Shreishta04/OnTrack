@@ -58,7 +58,12 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 
 **Budget**
 - **Total uses the discounted price**; MRP is shown alongside, with total savings
-- **Spent this month** comes off the budget: `remaining = budget − spent this month − planned`
+- **Monthly periods that start on my payday:** I pick the day my money comes in (the 25th, say) on a calendar of 1–31, and the budget starts fresh that day every month. The 29th–31st become the last day of a shorter month. Until a day is picked, periods follow the calendar month
+- **A default budget, or one just for this period:** every new period starts with the default; a bigger month (a wedding, a festival) can get its own amount with **Just this period**, and the next one goes back to the default. Unspent money doesn't carry over
+- **Changing the reset day** takes effect from its next date after today: picking the 25th on 10 Nov ends this period on 24 Nov; picking the 5th makes this period run to 4 Dec. The editor shows exactly that before saving
+- **Spent this period** comes off the budget: `remaining = budget − spent this period − planned`. The card says when the next one starts (*"after your wish list · new budget on 25 Nov"*)
+- **Set up on first login:** if the budget or the reset day isn't set, a *Set up your budget* screen comes before the list. **Skip for now** is allowed, and then a bar at the top of the list (*"Pick the day your budget resets · Set it"*) stays until both are set
+- **Analytics** (`/analytics`, the chart icon in the header): this period (days left, roughly how much a day is left after the wish list, how far through it I am), the last six periods as bars against a dashed budget line, every past period with *under* / *over*, and which stores the money went to over the last three periods
 - **What fits, by ticking:** tick items on the wish list and a bar slides up with their total, live: *"3 selected · ₹2,947 · ₹53 left this month"* (or *"₹1,947 over"*), compared with the budget minus what's already spent. On **Later**, ticked items are compared with what's left **after** the wish list (*"with your wish list"*), to see what can come back. Nothing changes until a button is pressed: **Mark bought**, **Move to Later**, **Park the rest** (every unticked wish-list item goes to Later), or **Back to wish list**
 - **Ticking works on every tab,** with **Select all** (it turns into **Clear all**). On **Bought** the bar shows what you paid, with **Back to wish list** (an undo for a mistaken purchase) and **Move to Later**; on **All** it shows the total, with **Mark bought**, **To Later** and **To wish list**. Neither shows "left": bought items are already in "spent", so it would count them twice. Items already on the target list are left alone
 - **Mark bought asks first for 5 or more items** (*"Mark 12 items as bought? They'll count as spent this month."*), so Select all plus one stray tap can't empty the wish list
@@ -84,8 +89,8 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Placeholder letters:** items without a photo show their first letter; an item still named after its link shows the **store's** letter (A for Amazon) instead of "H" from *https*
 - **Refresh button (↻)** in the header: the server re-checks every store except Amazon (the iPhone does Amazon), the icon spins while it works, and a short note says what happened (*"Checked 4 · 1 price dropped · Amazon refreshes from your iPhone"*, or *"All prices were checked in the last hour"*)
 - **Stays current by itself:** coming back to the app (from Shortcuts, another app or another tab) reloads the list, so prices the iPhone refreshed show up without a manual reload
-- **Settings, as its own page** (`/settings`, the gear in the header): profile, **Appearance** (Light · Dark · Auto, where Auto follows the phone), monthly budget, region (currency, country, time zone), change password, **Shortcuts and extension** (device keys), **People and invites** (owner only), log out. Each row opens its editor underneath it
-- **Back works like an app:** the phone's Back button or swipe closes an open sheet (add, budget) or the search, and returns from Settings to the list. iPhone's home-screen app has no back swipe of its own, so Settings gets one: swipe in from the left edge
+- **Settings, as its own page** (`/settings`, the gear in the header): profile, **Appearance** (Light · Dark · Auto, where Auto follows the phone), monthly budget and reset day, region (currency, country, time zone), change password, **Shortcuts and extension** (device keys), **People and invites** (owner only), log out. Each row opens its editor underneath it
+- **Back works like an app:** the phone's Back button or swipe closes an open sheet (add, budget) or the search, and returns from Settings or Analytics to the list. iPhone's home-screen app has no back swipe of its own, so both pages get one: swipe in from the left edge
 - **Light and dark mode:** designed for both, not just inverted (in dark mode the budget card is a lifted warm brown and the active tab and + button turn cream). Auto follows the device; the choice is remembered
 - **Works on laptop and phone:** two columns on a laptop, one on a phone, with no separate phone code
 
@@ -134,7 +139,8 @@ The web app is a React + TypeScript single page, built with Vite. Each part of t
 ### Data model
 
 ```
-users             one person: email, password hash, budget, currency, country, time zone, owner or not
+users             one person: email, password hash, default budget, reset day, currency, country, time zone, owner or not
+  ├── periods     one budget period (starts_on, ends_on, budget, custom), saved when it starts
   ├── tokens      a login (web app) or a device key (Shortcut, extension); only a SHA-256 hash is kept
   ├── invites     one-time sign-up links, and password-reset links (for_user_id set)
   └── items       a thing I want to buy ("Smartwatch")
@@ -144,6 +150,8 @@ users             one person: email, password hash, budget, currency, country, t
         └── status_changes        one row per move between lists (from → to, when)
 settings          key/value; only the budget from before Accounts, read once
 ```
+
+Periods are **saved as they start**, so changing the default budget or the reset day never rewrites the past: October keeps the budget it had. If I don't open the app for three months, the missed months are saved (with the default) the next time I do.
 
 Deleting an item removes its links, price history and status history with it (`ON DELETE CASCADE`). Links carry `user_id` as well as their item, so the database itself enforces "unique per person": a unique index on `(user_id, url)`.
 
@@ -631,6 +639,33 @@ With 20-odd items, finding things meant scrolling, and selecting meant tapping e
 
 **7. Drawing the ring.** Each arc is a dashed circle: a dash as long as the arc, a gap as long as the rest, and an offset for where it starts. Rounded ends stick out by half the line's thickness, so each dash is drawn that much shorter. The linter flagged the running position being changed while React draws, so the arithmetic moved into a plain function (`arcsFor`).
 
+### 36. Budget periods: a month that starts on payday
+
+I'm paid on a set day, not the 1st, so "this month" never matched my money. I wanted to pick that day, have a default budget, change one month by hand, and see past months.
+
+**1. Periods are saved when they start, not worked out every time.**
+- *Problem:* if a period is just "the 25th to the 24th", then changing the reset day or the default budget later silently rewrites every past month, and Analytics would show October with a budget it never had.
+- *Fix:* a `periods` table. When a period starts it's saved with that day's default, and it never changes after that. If I don't open the app for a while, it walks forward and saves each missed month. Two requests at the same moment could both try to save the same period, so the insert is `ON CONFLICT DO NOTHING` and the database's unique `(user_id, starts_on)` decides.
+
+**2. Changing the reset day in the middle of a period.**
+- *Decision:* the new day takes effect from its **next date after today** (today counts as gone). On 10 Nov, the 25th ends this period on 24 Nov; the 5th has already passed this month, so this period stretches to 4 Dec instead of being cut to five days. The editor shows the new dates before saving, using a copy of the same rule (`nextResetAfter` in `format.ts`).
+- *Tested with a fake clock:* the tests set what the server thinks "now" is, including 00:30 on payday in India (still the evening before in UTC), which must already count as the new period.
+
+**3. The 31st in February.**
+- *Decision:* the 29th–31st become the last day of a short month, so a 31st reset runs 28 Feb – 30 Mar in 2027. A test checks it, and a leap year.
+
+**4. "Just this period" without losing the default.**
+- *Decision:* the default lives on `users.budget`; a one-off amount only changes the current row in `periods` (marked `custom`). The next period starts from the default again.
+- *Bug found in a screenshot:* with a one-off ₹20,000 active, Settings opened the editor on *Every period* filled with **20000**, so pressing Save would have quietly made it the new default. Each choice now starts with its own amount (the default, or this period's), and swaps only if I haven't typed over it. A browser check covers it.
+
+**5. Asking for the budget without nagging.**
+- *Decision:* straight after logging in, if the budget or the reset day is missing, a *Set up your budget* screen comes first. *Skip for now* goes to the list and is remembered on that device until the next login, so it doesn't pop up on every visit; a bar at the top of the list stays until both are set. My own account had a budget but no reset day, so it got the bar too.
+
+**6. Deploying a backend change without breaking the live app.**
+- *Problem:* Vercel publishes the web app within a minute of merging; Railway only after I update it. For that gap the new app talks to the old server, which has no `period` and no `/periods`.
+- *Fix:* the app treats `period` as optional: with an old server there's no setup screen, no bar and no chart icon, and everything else works as before. The 130 browser checks from the last two features run against exactly that kind of server and still pass.
+- *Also:* the server's packages are now pinned to exact versions (`requirements.txt`), and the test tools moved to `requirements-dev.txt`, so Railway, GitHub Actions and my laptop install the same thing.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -643,6 +678,9 @@ With 20-odd items, finding things meant scrolling, and selecting meant tapping e
 - **Rate limits live in memory:** they reset when the server restarts, and they'd need a shared store if OnTrack ever ran on several servers at once.
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
+- **Periods are monthly only.** Weekly or yearly periods are parked.
+- **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
+- **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
 - **Search** looks at names and store names, on the tab you're on; it doesn't search notes or other tabs at once (use the All tab for that).
 - **Shrink-to-fit amounts need iOS 16 or newer** (2022); older iPhones show amounts at a fixed size, which can wrap for very large numbers.
 - **The extension is loaded by hand** (Developer mode → Load unpacked), not from the Chrome Web Store, so it shows a small "unpacked" badge, and after editing its files it needs a reload in `chrome://extensions`.
@@ -739,7 +777,7 @@ cd OnTrack
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # if blocked: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 cd backend
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # the app's packages plus pytest; the server alone uses requirements.txt
 Copy-Item .env.example .env         # then set ONTRACK_API_KEY in .env
 ```
 
@@ -898,8 +936,9 @@ All endpoints except `/health` and `/auth/signup|login|reset` need a login token
 | `GET` · `POST` · `DELETE` | `/invites` · `/invites/{id}` | Owner: list, make (7 days, one use) or cancel invites |
 | `GET` | `/users` | Owner: everyone with an account |
 | `POST` | `/users/{id}/reset` | Owner: a one-time password-reset code (2 days) |
-| `GET` | `/summary` | Budget, discounted total, spent this month, remaining, savings vs MRP, what fits, all items |
-| `PUT` | `/budget` | Set the monthly budget |
+| `GET` | `/summary` | This period (dates, days left, budget, default, reset day), discounted total, spent this period, remaining, savings vs MRP, what fits, all items |
+| `PUT` | `/budget` | Set the budget (`amount`; `scope`: `every` for the default or `once` for this period only; optional `reset_day` 1–31). Answers with the current period |
+| `GET` | `/periods` | Saved periods, newest first, each with its budget and what was spent in it |
 | `GET` | `/items?status=` | List items: `planned`, `later`, `purchased` or `all` (default) |
 | `GET` | `/items/{id}` | One item with its links |
 | `GET` | `/items/{id}/history` | Every price check for the item's links, oldest first |
@@ -928,8 +967,9 @@ OnTrack/
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS): 171, most run on SQLite and Postgres
-│   ├── requirements.txt
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock): 196, most run on SQLite and Postgres
+│   ├── requirements.txt   exact versions the server runs with (Railway installs these)
+│   ├── requirements-dev.txt  the same plus pytest and httpx, for running the tests
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
     ├── index.html             the single HTML page (fonts, theme colour, icon, manifest, home-screen tags)
@@ -955,7 +995,8 @@ OnTrack/
         │   ├── usePhone.ts    phone-sized screen? opened from the home screen?
         │   ├── useNewVersion.ts  is a newer build live? (the Update line)
         │   ├── useSwipe.ts    a flick left or right on the list changes tab
-        │   └── useNav.ts      the page (list or Settings) and open sheet, kept in history so Back works
+        │   ├── useNav.ts      the page (list, Settings or Analytics) and open sheet, kept in history so Back works
+        │   └── useEdgeBack.ts the iPhone home-screen app's swipe-from-the-edge Back, for Settings and Analytics
         └── components/
             ├── BudgetCard.tsx     the espresso card: what's left, the ring, the three totals
             ├── Price.tsx          every amount, drawn the same way, in the person's currency
@@ -970,8 +1011,10 @@ OnTrack/
             ├── Thumb.tsx          product photo or a letter
             ├── AuthScreen.tsx     log in, sign up with an invite, new password from a reset link
             ├── SettingsPage.tsx   the /settings page: profile, appearance, budget, region, password, device keys, people (owner), log out
-            ├── BudgetEditor.tsx   the budget form (used by the sheet and by Settings)
-            ├── BudgetSheet.tsx    the sheet that opens when you tap the budget card
+            ├── BudgetEditor.tsx   the budget form: amount, every / just this period, the reset-day calendar and what it means (sheet, Settings, setup)
+            ├── BudgetSetup.tsx    "Set up your budget", straight after logging in while it isn't set
+            ├── AnalyticsPage.tsx  the /analytics page: this period, past periods chart and list, spend by store
+            ├── BudgetSheet.tsx    the sheet that opens when you tap the budget card or "Set it"
             └── Icons.tsx          small line icons (search, gear, back, refresh, sun, moon, …)
 └── extension/                 Chrome / Edge extension (plain JavaScript, no build step)
     ├── manifest.json          name, permissions (current tab only, on click), icons
@@ -1019,13 +1062,15 @@ OnTrack/
 - [x] A design pass on the whole app ("the vibes"), agreed in mockups first: espresso budget card with a ring, item cards, light and dark designed separately
 - [x] Search your list by name or store
 - [x] Settings as its own page (`/settings`), with the phone's Back working everywhere
-- [ ] Analytics: what kinds of things I spend on (needs a category per item, picked or guessed)
+- [x] Analytics page: this period, past periods against their budgets, spend by store
+- [ ] Analytics by type: what kinds of things I spend on (needs a category per item, picked or guessed)
 - [ ] Flipkart MRP (the struck-through price)
 - [x] Accounts: invite-only sign-up, email + password, own list and budget, device keys for the Shortcuts and extension, reset links, my existing list moved into my account
 - [x] Per-person currency, country and time zone
 - [ ] Warn when a store's currency isn't the person's (no conversion yet)
 
-- [ ] Budget periods: choose weekly, monthly or yearly; see past periods with their budget and what I spent
+- [x] Budget periods: monthly, starting on the day I pick (payday), a default budget or one just for this period, past periods kept, setup on first login
+- [ ] Weekly or yearly periods (parked: monthly covers how I'm paid)
 
 **Parked ideas**
 - Native Android app with Flutter (installs as an APK on Android; an iPhone build would need a Mac, so the iPhone gets the PWA)
@@ -1117,3 +1162,8 @@ OnTrack/
 - `feature/look`, the design pass: three directions mocked on a design canvas, then B (*Espresso card*) refined in light and dark with a Settings page. Built it: new colour tokens for both modes, the espresso budget card with a ring (tap it to change the budget), item cards with tinted letters and price-drop / needs-a-price pills, a search bar, and Settings as its own page at `/settings`
 - Made the phone's Back work everywhere: sheets, search and Settings are history entries (`useNav`), Vercel sends every address to the app, and the iPhone's home-screen app gets its own edge swipe on Settings
 - Found by looking at screenshots: amounts breaking mid-number in narrow spaces (now shrink to fit with container units) and the budget dots gone with the old styles (restored, now tested). 71 new browser checks plus the 59 list checks, phone and laptop, light and dark (Challenge 35)
+- `feature/budget-periods`, designed in mockups first: monthly periods starting on a day I pick on a calendar (payday), a default budget or one just for this period, no carry-over, and a reset day change that takes effect from its next date. Periods are saved as they start, so the past never changes (Challenge 36)
+- Backend: a `periods` table, a `reset_day` column added to the live database on start, `PUT /budget` with `scope` and `reset_day`, and `GET /periods`. 25 new tests with a fake clock, India midnight, the 31st in February, months skipped, and the live database being upgraded; 196 pass on SQLite and Postgres, and the new ones fail on the old code
+- Web app: the reset-day calendar with a preview of the new dates, a *Set up your budget* screen after logging in (with *Skip for now* and a reminder bar until it's set), budget and reset day rows in Settings, and an Analytics page behind a chart icon (this period, six periods as bars against the budget, past periods under / over, spend by store). It still works with the old server while Railway catches up
+- Pinned the server's packages to exact versions and moved pytest to `requirements-dev.txt`
+- Checked in headless Chromium: 70 new checks (setup, skip, bar, calendar dates for the 25th, 5th, 31st and 1st, the exact requests, Settings, Analytics, Back and the iPhone edge swipe, 360 px, dark) plus the 130 earlier ones against an old-style server

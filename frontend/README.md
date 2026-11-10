@@ -69,7 +69,7 @@ src/
 ├── money.tsx          the person's currency: symbol and digit grouping, shared through a React context
 ├── places.ts          countries, currencies, time zones, and first guesses from the device
 ├── types.ts           TypeScript shapes of the data the backend sends
-├── format.ts          store names ("Amazon"), short dates ("5 Oct"), plain-words errors and tips
+├── format.ts          store names ("Amazon"), short dates ("5 Oct"), plain-words errors and tips, period dates (the server's reset rule, copied)
 ├── sort.ts            the four sort orders (newest, oldest, price both ways), remembered on this device
 ├── tabs.ts            the four tabs, left to right (shared by the tabs, swiping and the slide direction)
 ├── index.css          design tokens (light + dark), layout and component styles
@@ -78,11 +78,14 @@ src/
 │   ├── usePhone.ts    phone-sized screen (the + button layout)? opened from the home screen?
 │   ├── useNewVersion.ts  is a newer build live? (shows the Update line)
 │   ├── useSwipe.ts    a flick left or right on the list changes tab (ignores edge swipes, scrolling, slow drags)
-│   └── useNav.ts      which page (list or /settings) and which sheet is open, kept in history so Back works
+│   ├── useNav.ts      which page (list, /settings or /analytics) and which sheet is open, kept in history so Back works
+│   └── useEdgeBack.ts the iPhone home-screen app's swipe-from-the-left-edge Back (Settings, Analytics)
 └── components/
     ├── BudgetCard.tsx     the espresso card: what's left, the ring (spent / planned / left), the totals; tap to edit
-    ├── BudgetEditor.tsx   the budget form, shared by the sheet and Settings
-    ├── BudgetSheet.tsx    the sheet that opens when you tap the budget card
+    ├── BudgetEditor.tsx   the budget form: amount, Every / Just this period, the 1–31 reset-day calendar and a preview of the dates
+    ├── BudgetSheet.tsx    the sheet that opens when you tap the budget card or "Set it" on the reminder bar
+    ├── BudgetSetup.tsx    "Set up your budget": shown after logging in while the budget or reset day is missing
+    ├── AnalyticsPage.tsx  /analytics: this period, six periods as bars against the budget, past periods, spend by store
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
     ├── AddLink.tsx        paste-a-link box
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
@@ -94,7 +97,7 @@ src/
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
-    ├── SettingsPage.tsx   /settings: profile, appearance, budget, region, password, device keys, people (owner), log out
+    ├── SettingsPage.tsx   /settings: profile, appearance, budget and reset day, region, password, device keys, people (owner), log out
     └── Icons.tsx          small line icons (search, gear, back, refresh, sun, moon, close, chevron, …)
 ```
 
@@ -102,17 +105,19 @@ src/
 
 **How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits. It also reloads when the page becomes visible again (`visibilitychange`), so changes made elsewhere, like the iPhone's Refresh OnTrack, show up without a manual reload.
 
+**Budget periods:** `/summary` has a `period` (dates, days left, this period's budget, the default and the reset day). It's optional in `types.ts`, because for a minute after merging, Vercel's new app can talk to Railway's old server. Without it there's no setup screen, reminder bar or chart icon; with it, `App` shows `BudgetSetup` until the budget and reset day are set or *Skip for now* is pressed (remembered in `localStorage` until the next login), then a reminder bar until both are set. The editor's preview uses `nextResetAfter()`, a copy of the server's rule, so it shows the same dates the server will save.
+
 **Sorting and ticking happen in the browser:** `/summary` already holds every item, so `sortItems()` reorders a copy for the current tab, and ticks are just a set of ids in `App`'s state (a "what if"). Only the bar's buttons talk to the server: one `PATCH /items/{id}` per item, skipping items already on the target list, then one reload.
 
 ## Pages and the Back button
 
-There are two pages, `/` (the list) and `/settings`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
+There are three pages, `/` (the list), `/settings` and `/analytics`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
 
-- Opening a page or a sheet adds one history entry (`history.pushState`); closing it (✕, Save, Escape) goes back one entry, exactly what the phone's Back does. So the phone's Back button or swipe closes a sheet, and returns from Settings to the list.
+- Opening a page or a sheet adds one history entry (`history.pushState`); closing it (✕, Save, Escape) goes back one entry, exactly what the phone's Back does. So the phone's Back button or swipe closes a sheet, and returns from Settings or Analytics to the list.
 - The pushes happen in click handlers, never in effects: React's development mode runs effects twice, which would push two entries.
-- Opened straight on `/settings` (a refresh, a bookmark), there's no entry to go back to, so Back swaps the entry for the list instead of leaving the app.
-- `vercel.json` sends every address to `index.html`, so `/settings` loads on a refresh; Vite's dev server and `npm run preview` already do this.
-- iPhone's home-screen app has no back swipe, so `SettingsPage` adds a left-edge swipe when `navigator.standalone` is true (never in Safari, which has its own).
+- Opened straight on `/settings` or `/analytics` (a refresh, a bookmark), there's no entry to go back to, so Back swaps the entry for the list instead of leaving the app.
+- `vercel.json` sends every address to `index.html`, so `/settings` and `/analytics` load on a refresh; Vite's dev server and `npm run preview` already do this.
+- iPhone's home-screen app has no back swipe, so `SettingsPage` and `AnalyticsPage` add a left-edge swipe (`useEdgeBack`) when `navigator.standalone` is true (never in Safari, which has its own).
 
 ## Phone app (PWA)
 
