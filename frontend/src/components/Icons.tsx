@@ -64,3 +64,21 @@ export function PlusIcon() {
     </svg>
   )
 }
+
+// The little "v" on the sort button (it turns over while the menu is open).
+export function ChevronIcon() {
+  return (
+    <svg {...common} width={14} height={14} strokeWidth={2}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
+// The tick beside the chosen sort.
+export function CheckIcon() {
+  return (
+    <svg {...common} width={16} height={16} strokeWidth={2}>
+      <path d="M5 12.5l4.5 4.5L19 7.5" />
+    </svg>
+  )
+}
