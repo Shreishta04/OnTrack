@@ -2197,3 +2197,82 @@ body {
   border-radius: 999px;
   background: var(--text);
 }
+
+/* ============================================================
+   fix-items: type a price, Edit, delete several
+   ============================================================ */
+
+/* Clay, for the one button that removes things for good */
+.btn-danger {
+  background: var(--warn-dot);
+  color: #FFFDFA;
+}
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.select-delete {
+  margin-left: auto; /* away from the move buttons, on the right */
+}
+
+/* "₹ [Type the price] [Save]" under a card that needs a price */
+.price-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 6px 6px 6px 14px;
+  border-radius: 999px;
+  background: var(--bg);
+}
+.price-box-symbol {
+  color: var(--muted);
+  font-weight: 600;
+}
+.price-box-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  font-size: 16px; /* 16px or more: iPhones don't zoom in on it */
+}
+.price-box-input:focus {
+  outline: none;
+}
+.price-box:focus-within {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.price-box .btn {
+  height: 40px;
+}
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+.edit-form .eyebrow {
+  margin-top: 6px;
+}
+.edit-form .field {
+  font-size: 16px;
+}
+.edit-note {
+  min-height: 64px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-radius: 16px;
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.row-note {
+  white-space: pre-wrap;
+  font-style: italic;
+}
+.add-iphone {
+  width: 100%;
+  margin-top: 8px;
+}

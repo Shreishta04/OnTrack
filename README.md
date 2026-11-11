@@ -42,7 +42,8 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Forgot the password?** I make a one-time reset link (valid 2 days) in **Settings → People and invites**. Using it signs out old logins but keeps device keys, so the Shortcuts don't break. Changing a password signs out every other login
 
 **Saving items**
-- **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet
+- **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet. It also takes a link buried in text (Instagram, WhatsApp, the Google app's *"Source: … share.google/…"*), and answers with a **normal iPhone notification** (*"Added to OnTrack · Coach Tabby Bag · $450"*, *"Already on your list · …"*, *"Added, but no price yet"*), not JSON
+- **Add with my iPhone:** on an iPhone, the add box has a second button that hands the pasted link to the Shortcut, so the **phone** downloads the store's page. Pasting alone makes the server download it from Singapore, which many stores block or answer with another country's page
 - **Paste a link** (laptop / API) → same result, with the server fetching the page itself
 - **One item, several stores:** e.g. the same watch on Amazon and Fastrack. Only the **cheapest** link counts toward the budget, so items are never counted twice
 - **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected. Amazon, Savana and Flipkart links are reduced to just the part that identifies the product
@@ -54,6 +55,10 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - Every item is in one of three lists: **planned** (wish list, counts toward the budget), **later** (parked, not counted), **purchased** (bought)
 - Items move freely between lists, and **every move is recorded** with a timestamp
 - **Mark as bought** saves the purchase price and date; the price can be edited afterwards (coupons, bank offers). **Undo** clears them
+- **Edit any item:** the name, a note (size, colour, for whom), and a price: what I paid on Bought, my own price while no store gives one. A store's price isn't typed over: it comes from the store and updates on refresh
+- **Type a price** straight on a card that says *Needs a price*, instead of deleting it and adding it again by hand. The store link stays, so a later refresh can still bring in the store's own price
+- **Delete several at once** from the tick bar, on every tab. It always asks first (*"Delete 3 items? This can't be undone."*)
+- Items a store wouldn't show yet are called **"Amazon item"** (the store's name) instead of their long link, until a check finds the real name. Store names are spelled properly (*Victoria's Secret*, *TikTok*, *H&M*)
 - Ask for one list at a time (`?status=planned|later|purchased|all`) for the app's tabs
 
 **Budget**
@@ -666,6 +671,38 @@ I'm paid on a set day, not the 1st, so "this month" never matched my money. I wa
 - *Fix:* the app treats `period` as optional: with an old server there's no setup screen, no bar and no chart icon, and everything else works as before. The 130 browser checks from the last two features run against exactly that kind of server and still pass.
 - *Also:* the server's packages are now pinned to exact versions (`requirements.txt`), and the test tools moved to `requirements-dev.txt`, so Railway, GitHub Actions and my laptop install the same thing.
 
+### 37. A friend in the US: nothing had a price
+
+The first person outside India tried OnTrack. Coach, Target, Amazon, Littlebox, Savana, Victoria's Secret: names sometimes, prices and photos never, and no way to type a price afterwards.
+
+**1. The server is in Singapore, and he wasn't.**
+- *Symptom:* Amazon showed a bot-check; a TikTok link saved as **"TikTok Shop Singapore"**.
+- *Cause:* pasting a link makes the **server** download the page. Big stores block cloud servers, and stores that change by country saw a visitor from Singapore, so TikTok sent its Singapore home page.
+- *Fix:* the phone downloads the page instead. That already worked through the Shortcut (Amazon US came in at once, $26.59 with MRP and photo), so the app now has an **Add with my iPhone** button that hands the pasted link to the Shortcut (`shortcuts://run-shortcut?name=Add to OnTrack&input=text&text=<link>`). A web page can't download another site's page itself: browsers forbid it (CORS).
+
+**2. "The URL "Source: Victoria's Se…" is missing a hostname."**
+- *Cause:* the Google app's share button sends text with a Google short link inside, and my Shortcut had lost its *Get URLs from Input* step, so it took the text itself as the link.
+- *Fix:* *Get URLs from Input* → *Last Item from URLs*, as the table in "Getting started" says. Any share with text around the link now works. The `share.google` link itself is fine: the phone follows it to the store, and the server reads the product's own address from the page.
+
+**3. JSON on the phone.**
+- *Fix:* `?reply=text` on the two upload addresses makes the server answer with one sentence, which the Shortcut shows as a notification. Errors too, including the ones answered before a route runs (wrong key, too big, too many requests), through one outermost middleware. Without `?reply=text` nothing changes, so old Shortcuts keep working. The wording lives on the server, so it can improve without anyone editing their Shortcut again.
+- *Bonus:* `36.990000000000002` in the old JSON was the Shortcuts app printing a decimal with every digit it has; the sentences show `$36.99`.
+
+**4. No way to fix an item by hand.**
+- *Fix:* a price box on every *Needs a price* card, an **Edit** form (name, note, price: what I paid on Bought, my own price otherwise), and **Delete** in the tick bar on every tab, always asking first.
+
+**5. The standard product data, written in more ways.**
+- *Fix:* the reader now finds a price in `priceSpecification` (one or a list), in offers inside an `AggregateOffer`, and on the variants of a `ProductGroup` (taking the group's name and photo). It forgives small mistakes in the data (a comma before a closing bracket, a line break inside a name, an HTML comment around it, `application/ld+json; charset=utf-8`) instead of skipping the whole block. Coach India and Victoria's Secret India already worked through the phone. **Target** keeps its price outside the standard data and needs its own reader: waiting for a saved page.
+
+**6. Refresh overwrote what the phone had found.**
+- *Symptom:* an item added from the phone said *"…probably loads its price with JavaScript"*, the server's guess, after ↻.
+- *Cause:* ↻ re-downloads every non-Amazon link on the server, and its failure replaced the phone's explanation.
+- *Fix:* links remember who read them last (`read_via`: `server` or `upload`). When the server fails on a link the phone read, only "last checked" changes.
+
+**7. "Invalid multipart data."**
+- *Symptom:* the Google app's share icon → the server couldn't take the uploaded form apart. Copying the link and running the Shortcut worked.
+- *Not solved yet:* I couldn't reproduce it (odd file names were all accepted). The server now logs how such an upload was labelled and how big it was (never the key or the page), so the next one shows the cause.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -679,6 +716,8 @@ I'm paid on a set day, not the 1st, so "this month" never matched my money. I wa
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
 - **Periods are monthly only.** Weekly or yearly periods are parked.
+- **Target and Victoria's Secret US** don't give a price yet (their prices aren't in the standard product data). **Add with my iPhone** needs the Shortcut to be named exactly *Add to OnTrack*, and leaves you in the Shortcuts app afterwards (switch back to OnTrack; the list reloads by itself).
+- **Deleting has no undo yet**; that's what the "are you sure?" is for until the recycle bin.
 - **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
 - **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
 - **Search** looks at names and store names, on the tab you're on; it doesn't search notes or other tabs at once (use the All tab for that).
@@ -751,8 +790,8 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 **Pointing the phone and the extension at it**
 - iPhone: Safari → the web app → Share → **Add to Home Screen** → open the icon → log in (the home-screen app keeps its own login). Android: Chrome → ⋮ → **Install app** → log in
 - **Settings → Shortcuts and extension → New key** once per device (e.g. "iPhone Shortcuts", "Laptop extension"); each key is shown once
-- **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html`, header `X-API-Key` = the iPhone's device key
-- **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html`, with the device key in both
+- **Add to OnTrack** Shortcut: step 5's URL → `https://ontrack-production-8f1d.up.railway.app/items/from-html?reply=text`, header `X-API-Key` = the iPhone's device key, last action **Show Notification**
+- **Refresh OnTrack** Shortcut: **both** URLs → `…/refresh/phone-list` and `…/links/<link_id>/from-html?reply=text` (only the second gets `?reply=text`), with the device key in both
 - Extension → sliders: server and app as above, the laptop's device key in *API key*. Chrome asks once for permission to reach the server. Clear each field completely (Ctrl+A) before pasting
 
 **Redeploying**
@@ -879,16 +918,16 @@ python extractor.py -f links.txt --debug     # --debug saves each fetched page t
 5. **To use the web app on the phone too:** start it with `npm run dev -- --host`, add `http://<IP>:5173` to `ONTRACK_CORS_ORIGINS` in `backend/.env` (restart uvicorn), open `http://<IP>:5173` on the phone, and set Settings → server to `http://<IP>:8000`.
 6. **If the server goes silent:** run `netstat -ano | findstr :8000` *before* restarting. More than one `LISTENING` line means an old server is still running: stop it with `taskkill /PID <number> /F`. Stop uvicorn with the terminal's trash icon rather than `Ctrl+C`.
 
-The **Add to OnTrack** Shortcut (shown in the Share Sheet, URLs only):
+The **Add to OnTrack** Shortcut (shown in the Share Sheet). **Name it exactly `Add to OnTrack`**: the app's *Add with my iPhone* button opens it by that name.
 
 | # | Action | Setting |
 |---|---|---|
 | 1 | Receive URLs and Text from Share Sheet | If there's no input: **Get Clipboard** (for stores with their own share menu: Copy Link, then run the Shortcut) |
 | 2 | Get URLs from Input | Pulls every link out of a shared message |
-| 3 | Get Item from List | **Last** item (Google puts the real link last; Amazon's two copies are identical) |
+| 3 | Get Item from List | **Last** item **from URLs** (step 2's result, not Shortcut Input). Google puts the real link last; Amazon's two copies are identical |
 | 4 | Get Contents of URL | Item from List → downloads the page on the phone |
-| 5 | Get Contents of URL | `http://<IP>:8000/items/from-html` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 4 |
-| 6 | Show Content | The server's reply, kept as full JSON for now so null values or errors are easy to spot |
+| 5 | Get Contents of URL | `http://<IP>:8000/items/from-html?reply=text` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 4 |
+| 6 | Show Notification | Contents of URL: one sentence from the server (`?reply=text`). Without `?reply=text` the server answers JSON as before, handy with **Show Content** when debugging |
 
 The **Refresh OnTrack** Shortcut (run directly, or daily with an iOS Automation):
 
@@ -899,9 +938,9 @@ The **Refresh OnTrack** Shortcut (run directly, or daily with an iOS Automation)
 | 3 | ↳ Get Dictionary Value | `url` in Repeat Item |
 | 4 | ↳ Get Dictionary Value | `link_id` in Repeat Item |
 | 5 | ↳ Get Contents of URL | the `url` value → downloads the Amazon page on the phone |
-| 6 | ↳ Get Contents of URL | `http://<IP>:8000/links/<link_id>/from-html` · POST · header `X-API-Key` · Form body: `html` (**File**, not Text) = page from step 5 |
+| 6 | ↳ Get Contents of URL | `http://<IP>:8000/links/<link_id>/from-html?reply=text` · POST · header `X-API-Key` · Form body: `html` (**File**, not Text) = page from step 5 |
 | 7 | End Repeat | |
-| 8 | Show Content | Repeat Results: one `{"link_id", "ok", "old_price", "new_price", "error"}` per link |
+| 8 | Show Notification | Repeat Results: one line per item, like *"Fastrack Ryz Watch: ↓ ₹1,799 (was ₹1,999)"* (step 1 stays JSON: the Shortcut reads it) |
 
 **Who refreshes what:**
 
@@ -963,11 +1002,12 @@ OnTrack/
 │   ├── main.py            FastAPI routes
 │   ├── auth.py            accounts: invites, passwords, tokens, resets
 │   ├── services.py        business logic
+│   ├── replies.py         the sentences the Shortcuts show (?reply=text) instead of JSON
 │   ├── db.py              schema and upgrades of old databases; SQLite or Postgres (DATABASE_URL)
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock): 196, most run on SQLite and Postgres
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock): 220, most run on SQLite and Postgres
 │   ├── requirements.txt   exact versions the server runs with (Railway installs these)
 │   ├── requirements-dev.txt  the same plus pytest and httpx, for running the tests
 │   └── .env.example       settings template (real .env is git-ignored)
@@ -986,7 +1026,8 @@ OnTrack/
         ├── money.tsx          the person's currency symbol and digit grouping, for every <Price>
         ├── places.ts          countries, currencies, time zones; first guesses from the device
         ├── types.ts           shapes of the data the backend sends
-        ├── format.ts          store names, short dates, plain-words errors and tips
+        ├── format.ts          store names (Victoria's Secret, not Victoriassecret), "Amazon item" for unnamed items, short dates, plain-words errors and tips
+        ├── shortcut.ts        "Add with my iPhone": opens the Add to OnTrack Shortcut with the link
         ├── sort.ts            the four sort orders, remembered on this device
         ├── tabs.ts            the four tabs, left to right
         ├── index.css          design tokens (light + dark), layout, components
@@ -1000,14 +1041,14 @@ OnTrack/
         └── components/
             ├── BudgetCard.tsx     the espresso card: what's left, the ring, the three totals
             ├── Price.tsx          every amount, drawn the same way, in the person's currency
-            ├── AddLink.tsx        paste-a-link box
+            ├── AddLink.tsx        paste-a-link box (+ "Add with my iPhone" on iPhones)
             ├── AddByHand.tsx      name, optional link, price
             ├── AddSheet.tsx       the phone's add sheet, behind the + button
-            ├── SelectionBar.tsx   ticked items: live total, left / over, bulk moves, "are you sure?" for 5+
+            ├── SelectionBar.tsx   ticked items: live total, left / over, bulk moves and Delete, "are you sure?" for 5+ bought and every delete
             ├── ListTools.tsx      Select all / Clear all, and the sort menu
             ├── Tabs.tsx           Wish list · Later · Bought · All, with the gliding pill
             ├── ItemList.tsx       the rows for the current tab
-            ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
+            ├── ItemRow.tsx        one expandable row: details, why it's stuck, type a price, Edit, actions
             ├── Thumb.tsx          product photo or a letter
             ├── AuthScreen.tsx     log in, sign up with an invite, new password from a reset link
             ├── SettingsPage.tsx   the /settings page: profile, appearance, budget, region, password, device keys, people (owner), log out
@@ -1037,12 +1078,14 @@ OnTrack/
 - [x] iOS Shortcut: "Refresh OnTrack" refreshes Amazon prices through the phone
 - [ ] One-tap refresh: the Shortcut also triggers the server's `/refresh` for other stores
 - [ ] Daily automatic refresh with an iOS Automation (after deployment, so it works on any network)
-- [ ] Shortcut: replace the raw JSON reply with a short notification (later; raw JSON is useful while testing)
+- [x] Shortcut: replace the raw JSON reply with a short notification (`?reply=text`)
+- [x] Add with my iPhone: the app hands a pasted link to the Shortcut
 - [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
 - [x] Backend fixes from phone testing: no database lock during downloads, 25 s limit per add, request-start logging, stuck links rescued (share again or Refresh), Flipkart duplicates
 - [x] Stuck rows explain why and how to fix them; Add by hand (name, price, optional link); typed prices labelled; store letters; short links corrected after a check
 - [x] Refresh button in the header (↻), and reload when the app's tab comes back into view; the server never fetches phone-only stores (Amazon)
-- [ ] Undo message after Delete and moves (two-tap Delete and "Undo purchase" cover the main cases for now)
+- [x] Edit an item (name, note, my price or what I paid), type a price on a card, delete several from the tick bar
+- [ ] Undo message after Delete and moves (two-tap Delete, the tick bar's "are you sure?" and "Undo purchase" cover the main cases for now)
 - [x] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`; Update price for saved items; Remove for pages without a price
 - [x] Installable PWA: home-screen icon and name, full screen, safe areas, works offline (read-only last list), Android share target; phone layout with the add forms behind a + button
 - [x] Postgres support: one setting (`DATABASE_URL`) picks SQLite or Postgres; tests run on both; a script copies my data across, keeping ids
@@ -1056,6 +1099,7 @@ OnTrack/
 - [ ] Savana on the deployed version (blocked from Railway; parked for now)
 - [ ] Tira support (tirabeauty.com and `trbt.ly` links)
 - [ ] Myntra / Ajio / Meesho support
+- [ ] Target and Victoria's Secret US readers (prices outside the standard product data)
 - [ ] Shopify cart import (Come Again charm bracelets)
 - [x] Replace the per-row "Over budget" tags with ticking: a live selection bar (total, left or over) and bulk Mark bought / Move to Later / Park the rest / Back to wish list
 - [x] List tools: sort (newest, oldest, price both ways), Select all and ticking on every tab, a gliding tab pill, swiping between tabs on the phone
@@ -1167,3 +1211,6 @@ OnTrack/
 - Web app: the reset-day calendar with a preview of the new dates, a *Set up your budget* screen after logging in (with *Skip for now* and a reminder bar until it's set), budget and reset day rows in Settings, and an Analytics page behind a chart icon (this period, six periods as bars against the budget, past periods under / over, spend by store). It still works with the old server while Railway catches up
 - Pinned the server's packages to exact versions and moved pytest to `requirements-dev.txt`
 - Checked in headless Chromium: 70 new checks (setup, skip, bar, calendar dates for the 25th, 5th, 31st and 1st, the exact requests, Settings, Analytics, Back and the iPhone edge swipe, 360 px, dark) plus the 130 earlier ones against an old-style server
+- **11 Nov 2026:** merged as PR #19 and deployed; picked my reset day on the phone. Railway's trial ends today: the Free option only appears once it has
+- A friend in the US tried it: no prices anywhere (Challenge 37). Fixed the Shortcut (*Get URLs from Input*), and Coach India and VS India came in through the phone
+- `feature/fix-items`: plain-sentence Shortcut replies (`?reply=text`), **Add with my iPhone**, type a price, Edit, Delete in the tick bar, more ways of reading the standard price data, proper store names, "Amazon item" for unnamed items, refresh no longer overwriting the phone's result, and logging for "Invalid multipart data". 24 new tests (220 pass on SQLite and Postgres; 11 fail on the old code), 28 new browser checks plus the 200 earlier ones

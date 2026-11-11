@@ -168,7 +168,13 @@ export const addFromLink = (url: string) => request<Item>('/items/from-link', po
 export const addManual = (name: string, price: number, url?: string) =>
   request<Item>('/items', post(url ? { name, price, url } : { name, price }))
 
-export const patchItem = (id: number, fields: { status?: Status; name?: string; purchased_price?: number }) =>
+export const patchItem = (id: number, fields: {
+  status?: Status
+  name?: string
+  note?: string | null
+  manual_price?: number | null
+  purchased_price?: number
+}) =>
   request<Item>(`/items/${id}`, { method: 'PATCH', body: JSON.stringify(fields) })
 
 // Re-check prices on the server (every store except Amazon, which the iPhone does).

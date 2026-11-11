@@ -69,7 +69,8 @@ src/
 ├── money.tsx          the person's currency: symbol and digit grouping, shared through a React context
 ├── places.ts          countries, currencies, time zones, and first guesses from the device
 ├── types.ts           TypeScript shapes of the data the backend sends
-├── format.ts          store names ("Amazon"), short dates ("5 Oct"), plain-words errors and tips, period dates (the server's reset rule, copied)
+├── format.ts          store names ("Amazon", "Victoria's Secret"), "Amazon item" for unnamed items, short dates ("5 Oct"), plain-words errors and tips, period dates (the server's reset rule, copied)
+├── shortcut.ts        "Add with my iPhone": the shortcuts:// link that runs Add to OnTrack with a link
 ├── sort.ts            the four sort orders (newest, oldest, price both ways), remembered on this device
 ├── tabs.ts            the four tabs, left to right (shared by the tabs, swiping and the slide direction)
 ├── index.css          design tokens (light + dark), layout and component styles
@@ -87,14 +88,14 @@ src/
     ├── BudgetSetup.tsx    "Set up your budget": shown after logging in while the budget or reset day is missing
     ├── AnalyticsPage.tsx  /analytics: this period, six periods as bars against the budget, past periods, spend by store
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
-    ├── AddLink.tsx        paste-a-link box
+    ├── AddLink.tsx        paste-a-link box, plus "Add with my iPhone" on iPhones (the phone downloads the page, not the server)
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
     ├── AddSheet.tsx       the phone's add sheet: both add forms, behind the + button
-    ├── SelectionBar.tsx   ticked items on any tab: live total, left / over (Wish list, Later), the right buttons per tab, "are you sure?" for 5+
+    ├── SelectionBar.tsx   ticked items on any tab: live total, left / over (Wish list, Later), the right buttons per tab, "are you sure?" for 5+ bought, Delete on every tab (always asks)
     ├── ListTools.tsx      the row above the list: Select all / Clear all, and the sort menu
     ├── Tabs.tsx           Wish list · Later · Bought · All, with a pill that measures and follows the active tab
     ├── ItemList.tsx       the rows for the current tab, or an empty message
-    ├── ItemRow.tsx        one expandable row: details, why it's stuck, actions
+    ├── ItemRow.tsx        one expandable row: details, why it's stuck, a price box when it needs one, Edit (name, note, price), actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
     ├── SettingsPage.tsx   /settings: profile, appearance, budget and reset day, region, password, device keys, people (owner), log out
@@ -106,6 +107,8 @@ src/
 **How data flows:** `App` loads `/summary` once and keeps it in state. It passes the data **down** to components as props, and components report button presses back **up** through functions (`onAction`, `onAdded`, `onBudgetSaved`). After every change, `App` reloads `/summary`, so the server stays the single source of truth for budgets, totals and what fits. It also reloads when the page becomes visible again (`visibilitychange`), so changes made elsewhere, like the iPhone's Refresh OnTrack, show up without a manual reload.
 
 **Budget periods:** `/summary` has a `period` (dates, days left, this period's budget, the default and the reset day). It's optional in `types.ts`, because for a minute after merging, Vercel's new app can talk to Railway's old server. Without it there's no setup screen, reminder bar or chart icon; with it, `App` shows `BudgetSetup` until the budget and reset day are set or *Skip for now* is pressed (remembered in `localStorage` until the next login), then a reminder bar until both are set. The editor's preview uses `nextResetAfter()`, a copy of the server's rule, so it shows the same dates the server will save.
+
+**Editing goes through the row's actions:** a row action is a move (`'later'`), `'delete'`, or `{ edit: {...} }` (Edit and the price box), so `App.handleAction` is the one place that talks to the server for a row. Only the fields that changed are sent.
 
 **Sorting and ticking happen in the browser:** `/summary` already holds every item, so `sortItems()` reorders a copy for the current tab, and ticks are just a set of ids in `App`'s state (a "what if"). Only the bar's buttons talk to the server: one `PATCH /items/{id}` per item, skipping items already on the target list, then one reload.
 

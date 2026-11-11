@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS links (
     method       TEXT,                         -- which extractor strategy worked
     last_checked TEXT,                         -- when we last TRIED (success or not)
     last_error   TEXT,                         -- why the last try failed, NULL if it worked
+    read_via     TEXT,                         -- who downloaded the page last time: 'server' or 'upload' (phone / extension)
     created_at   TEXT    NOT NULL
 );
 
@@ -245,10 +246,15 @@ def migrate(conn) -> None:
        first: "not chosen yet", which the app treats as the 1st and reminds
        the person to set. The periods table itself is new, so CREATE TABLE
        IF NOT EXISTS in SCHEMA makes it.
+    4. (fix-items) links get a read_via column: who downloaded the page the
+       last time ('server', or 'upload' from the phone or the extension).
+       Empty for older links.
     """
     pg = isinstance(conn, PgConnection)
     if "reset_day" not in columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN reset_day INTEGER")
+    if columns(conn, "links") and "read_via" not in columns(conn, "links"):
+        conn.execute("ALTER TABLE links ADD COLUMN read_via TEXT")
     if "user_id" not in columns(conn, "items"):
         conn.execute("ALTER TABLE items ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
     if pg:

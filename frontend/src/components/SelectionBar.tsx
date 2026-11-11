@@ -5,9 +5,9 @@ import { shownPrice } from '../sort'
 import Price from './Price'
 import { CloseIcon } from './Icons'
 
-// What a button in the bar asks for: move the ticked items, or "park the
-// rest" (move every UNticked wish-list item to Later).
-export type BulkAction = { move: Status } | 'park-rest'
+// What a button in the bar asks for: move the ticked items, "park the
+// rest" (move every UNticked wish-list item to Later), or delete the ticked ones.
+export type BulkAction = { move: Status } | 'park-rest' | 'delete'
 
 // Marking this many or more as bought asks "are you sure?" first: after
 // Select all, one stray tap would otherwise move the whole wish list.
@@ -40,6 +40,9 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
   // The number of items "Mark bought" was armed for. If the ticks change,
   // the number no longer matches and the question quietly goes away.
   const [armedFor, setArmedFor] = useState<number | null>(null)
+  // Delete always asks first (there's no undo yet), for the same number of items.
+  const [deleteFor, setDeleteFor] = useState<number | null>(null)
+  const confirmingDelete = deleteFor != null && deleteFor === picked.length
 
   const total = picked.reduce((sum, i) => sum + (shownPrice(i) ?? 0), 0)
   const unpriced = picked.filter((i) => shownPrice(i) == null).length
@@ -58,6 +61,7 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
     } finally {
       setBusy(false)
       setArmedFor(null)
+      setDeleteFor(null)
     }
   }
 
@@ -101,7 +105,21 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
         <p className="budget-note">{unpriced} without a price {unpriced === 1 ? 'isn’t' : 'aren’t'} counted.</p>
       )}
 
-      {confirming ? (
+      {confirmingDelete ? (
+        <div className="select-confirm">
+          <p>
+            Delete {picked.length === 1 ? 'this item' : `${picked.length} items`}? This can’t be undone.
+          </p>
+          <div className="select-actions">
+            <button className="btn btn-secondary" disabled={busy} onClick={() => setDeleteFor(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-danger" disabled={busy} onClick={() => run('delete')}>
+              Yes, delete
+            </button>
+          </div>
+        </div>
+      ) : confirming ? (
         <div className="select-confirm">
           <p>Mark {toBuy} items as bought? They’ll count as spent this month.</p>
           <div className="select-actions">
@@ -155,6 +173,10 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
               </button>
             </>
           )}
+          {/* on every tab; asks first */}
+          <button className="btn btn-quiet select-delete" disabled={busy} onClick={() => setDeleteFor(picked.length)}>
+            Delete
+          </button>
         </div>
       )}
     </section>
