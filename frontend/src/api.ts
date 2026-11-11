@@ -7,7 +7,7 @@
 // A header rather than a cookie, because Safari blocks cookies between the
 // web app's site (Vercel) and the server's (Railway).
 
-import type { AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
+import type { PeriodRow, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
 
 const SERVER_KEY = 'ontrack.server'
 const TOKEN_KEY = 'ontrack.token'
@@ -176,5 +176,12 @@ export const refreshPrices = () => request<RefreshResult>('/refresh', { method: 
 
 export const deleteItem = (id: number) => request<void>(`/items/${id}`, { method: 'DELETE' })
 
-export const setBudget = (amount: number) =>
-  request<{ budget: number }>('/budget', { method: 'PUT', body: JSON.stringify({ amount }) })
+// scope "every": the default for every period; "once": just this period.
+// resetDay: the day each period starts (salary day); left out, it stays.
+export const setBudget = (amount: number, scope: 'every' | 'once' = 'every', resetDay?: number) =>
+  request<{ budget: number }>('/budget', {
+    method: 'PUT',
+    body: JSON.stringify({ amount, scope, ...(resetDay ? { reset_day: resetDay } : {}) }),
+  })
+
+export const getPeriods = () => request<PeriodRow[]>('/periods')

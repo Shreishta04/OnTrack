@@ -1,12 +1,15 @@
 """
-Database layer: eight tables, on SQLite (my laptop) or Postgres (deployed).
+Database layer: nine tables, on SQLite (my laptop) or Postgres (deployed).
 
 Which one is decided by the DATABASE_URL setting:
   not set                      -> SQLite file (ONTRACK_DB, default ontrack.db)
   postgresql://user:pw@host/db -> Postgres
 
-  users          one row per person: email, password hash, budget, currency,
-                 country and time zone
+  users          one row per person: email, password hash, default budget,
+                 reset day, currency, country and time zone
+  periods        one row per budget period ("25 Oct – 24 Nov"), saved when it
+                 starts with the budget it had, so history never shifts when
+                 the default budget or the reset day changes later
   tokens         keys that let a phone, the extension or a logged-in browser act
                  as one user; only a hash is stored, so a database leak doesn't
                  leak working keys
@@ -42,11 +45,23 @@ CREATE TABLE IF NOT EXISTS users (
     name          TEXT    NOT NULL,
     password_hash TEXT    NOT NULL,            -- scrypt, never the password itself
     is_admin      INTEGER NOT NULL DEFAULT 0,  -- the owner: can invite people
-    budget        DOUBLE PRECISION,            -- monthly budget, NULL until set
+    budget        DOUBLE PRECISION,            -- default budget for each period, NULL until set
+    reset_day     INTEGER,                     -- 1-31: the day each period starts; NULL until chosen (works as the 1st)
     currency      TEXT    NOT NULL DEFAULT 'INR',
     country       TEXT    NOT NULL DEFAULT 'IN',
     timezone      TEXT    NOT NULL DEFAULT 'Asia/Kolkata',
     created_at    TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS periods (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    starts_on  TEXT    NOT NULL,             -- first day, on the person's own calendar (YYYY-MM-DD)
+    ends_on    TEXT    NOT NULL,             -- last day, included
+    budget     DOUBLE PRECISION,             -- this period's budget (NULL: none set)
+    custom     INTEGER NOT NULL DEFAULT 0,   -- 1: set "just for this period"
+    created_at TEXT    NOT NULL,
+    UNIQUE (user_id, starts_on)
 );
 
 CREATE TABLE IF NOT EXISTS tokens (
@@ -127,6 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_links_item   ON links(item_id);
 CREATE INDEX IF NOT EXISTS idx_history_link ON price_history(link_id, checked_at);
 CREATE INDEX IF NOT EXISTS idx_items_user   ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_user  ON tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_periods_user ON periods(user_id, starts_on);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_links_user_url ON links(user_id, url);
 """
 
@@ -225,8 +241,14 @@ def migrate(conn) -> None:
        a table, so there we follow SQLite's own recipe: make the new table,
        copy the rows (ids kept, so price history still points at them),
        drop the old one, rename the new one.
+    3. (budget periods) users get a reset_day column, empty for everyone at
+       first: "not chosen yet", which the app treats as the 1st and reminds
+       the person to set. The periods table itself is new, so CREATE TABLE
+       IF NOT EXISTS in SCHEMA makes it.
     """
     pg = isinstance(conn, PgConnection)
+    if "reset_day" not in columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN reset_day INTEGER")
     if "user_id" not in columns(conn, "items"):
         conn.execute("ALTER TABLE items ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
     if pg:

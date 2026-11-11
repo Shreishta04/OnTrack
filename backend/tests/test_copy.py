@@ -54,7 +54,7 @@ def sqlite_list(tmp_path, monkeypatch):
     conn.close()
     import psycopg                         # only here: Postgres runs only with TEST_DATABASE_URL
     with psycopg.connect(TEST_PG) as pg:
-        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings, invites, tokens, users CASCADE")
+        pg.execute("DROP TABLE IF EXISTS periods, status_changes, price_history, links, items, settings, invites, tokens, users CASCADE")
     return path
 
 
@@ -139,7 +139,7 @@ def test_sql_file_survives_awkward_names(tmp_path, monkeypatch):
     conn.close()
     import psycopg
     with psycopg.connect(TEST_PG) as pg:
-        pg.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings, invites, tokens, users CASCADE")
+        pg.execute("DROP TABLE IF EXISTS periods, status_changes, price_history, links, items, settings, invites, tokens, users CASCADE")
 
     script, _ = copy_to_postgres.to_sql(path)
     _run_script(script)

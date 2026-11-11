@@ -24,7 +24,8 @@ import time
 import sqlite3
 import os
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Callable
 from urllib.parse import urlsplit
@@ -88,6 +89,20 @@ def local_month(stamp: str | None, zone: ZoneInfo) -> str | None:
     if moment.tzinfo is None:                # written without a zone: it was UTC
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(zone).strftime("%Y-%m")
+
+
+def local_date(stamp: str | None, zone: ZoneInfo) -> date | None:
+    """The calendar day a stored UTC time falls on, in this time zone."""
+    if not stamp:
+        return None
+    moment = datetime.fromisoformat(stamp)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone).date()
+
+
+def today_in(zone: ZoneInfo) -> date:
+    return _utcnow().astimezone(zone).date()
 
 
 # ------------------------------------------------------------- store logs
@@ -207,16 +222,158 @@ def _browser_page_wording(p: Product) -> Product:
         return replace(p, error=NO_PRICE_FROM_BROWSER)     # a copy: never edit a shared result
     return p
 
-# ------------------------------------------------------------------ budget
+# ---------------------------------------------------------- budget periods
+#
+# A budget period runs from the person's reset day (say the 25th, when their
+# salary comes in) to the day before the next one: 25 Oct - 24 Nov. Rules:
+#   - Every new period starts with the DEFAULT budget (users.budget).
+#   - A budget can also be set "just for this period" (periods.custom = 1).
+#   - Unspent money doesn't carry over.
+#   - Reset day 29-31 in a shorter month: that month's last day.
+#   - Changing the reset day counts from its next date AFTER today: this
+#     period ends the day before it (so it can be shorter or longer once).
+#   - Each period is saved when it starts, with the budget it had, so the
+#     history never shifts when the default or the reset day changes later.
+#   - "Today" is on the person's own calendar (their time zone).
 
-def get_budget(conn: sqlite3.Connection, uid: int) -> float | None:
-    row = conn.execute("SELECT budget FROM users WHERE id = ?", (uid,)).fetchone()
-    return row["budget"] if row else None
+def _clamped(year: int, month: int, day: int) -> date:
+    """The reset day in a given month: the 31st in February is the 28th/29th."""
+    return date(year, month, min(day, calendar.monthrange(year, month)[1]))
 
 
-def set_budget(conn: sqlite3.Connection, uid: int, amount: float) -> None:
-    conn.execute("UPDATE users SET budget = ? WHERE id = ?", (amount, uid))
+def next_reset_after(d: date, day: int) -> date:
+    """The first reset date strictly after d."""
+    this_month = _clamped(d.year, d.month, day)
+    if this_month > d:
+        return this_month
+    year, month = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+    return _clamped(year, month, day)
+
+
+def last_reset_on_or_before(d: date, day: int) -> date:
+    """The most recent reset date, today included."""
+    this_month = _clamped(d.year, d.month, day)
+    if this_month <= d:
+        return this_month
+    year, month = (d.year - 1, 12) if d.month == 1 else (d.year, d.month - 1)
+    return _clamped(year, month, day)
+
+
+def _settings(conn, uid: int) -> dict:
+    row = conn.execute("SELECT budget, reset_day FROM users WHERE id = ?", (uid,)).fetchone()
+    return {"budget": row["budget"], "reset_day": row["reset_day"]}
+
+
+def current_period(conn, uid: int) -> dict:
+    """The period today falls in, saving it (and any missed ones) if needed."""
+    zone = user_zone(conn, uid)
+    today = today_in(zone)
+    t = today.isoformat()
+    me = _settings(conn, uid)
+    day = me["reset_day"] or 1
+
+    found = conn.execute("SELECT * FROM periods WHERE user_id = ? AND starts_on <= ? AND ends_on >= ?",
+                         (uid, t, t)).fetchone()
+    if found:
+        return dict(found)
+
+    latest = conn.execute("SELECT * FROM periods WHERE user_id = ? ORDER BY starts_on DESC LIMIT 1",
+                          (uid,)).fetchone()
+    if latest and latest["starts_on"] > t:
+        # Today is before the newest saved period: the clock or the time zone
+        # moved back (in tests, or a zone change at midnight). Work the
+        # period out without saving it.
+        start = last_reset_on_or_before(today, day)
+        end = min(next_reset_after(today, day), date.fromisoformat(latest["starts_on"])) - timedelta(days=1)
+        return {"id": None, "starts_on": min(start, end).isoformat(), "ends_on": end.isoformat(),
+                "budget": me["budget"], "custom": 0}
+
+    # Save every period from where the last one ended (or from the latest
+    # reset, the first time) up to the one containing today. Not opened for
+    # three months? Three periods are saved, each with the default budget.
+    start = (date.fromisoformat(latest["ends_on"]) + timedelta(days=1)) if latest \
+        else last_reset_on_or_before(today, day)
+    while True:
+        end = next_reset_after(start, day) - timedelta(days=1)
+        # ON CONFLICT: two requests at the same moment can't save it twice
+        conn.execute("INSERT INTO periods (user_id, starts_on, ends_on, budget, custom, created_at) "
+                     "VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (user_id, starts_on) DO NOTHING",
+                     (uid, start.isoformat(), end.isoformat(), me["budget"], now()))
+        if end >= today:
+            break
+        start = end + timedelta(days=1)
     conn.commit()
+    return dict(conn.execute("SELECT * FROM periods WHERE user_id = ? AND starts_on <= ? AND ends_on >= ?",
+                             (uid, t, t)).fetchone())
+
+
+def set_budget(conn, uid: int, amount: float, scope: str = "every") -> None:
+    """scope "every": the new default, and this period's budget too.
+    scope "once": this period only; the next one starts with the default."""
+    period = current_period(conn, uid)
+    if scope == "every":
+        conn.execute("UPDATE users SET budget = ? WHERE id = ?", (amount, uid))
+    if period["id"] is not None:
+        conn.execute("UPDATE periods SET budget = ?, custom = ? WHERE id = ?",
+                     (amount, 0 if scope == "every" else 1, period["id"]))
+    conn.commit()
+
+
+def set_reset_day(conn, uid: int, day: int) -> None:
+    """A new reset day counts from its next date after today: this period now
+    ends the day before it. (Today itself counts as gone: picking today's
+    date doesn't restart the budget halfway through the day.)"""
+    period = current_period(conn, uid)          # saved with the old day first
+    conn.execute("UPDATE users SET reset_day = ? WHERE id = ?", (day, uid))
+    if period["id"] is not None:
+        today = today_in(user_zone(conn, uid))
+        end = next_reset_after(today, day) - timedelta(days=1)
+        conn.execute("UPDATE periods SET ends_on = ? WHERE id = ?", (end.isoformat(), period["id"]))
+    conn.commit()
+
+
+def _spent_between(items: list[dict], start: str, end: str, zone: ZoneInfo) -> float:
+    total = 0.0
+    for i in items:
+        if i["status"] == "purchased":
+            d = local_date(i["purchased_at"], zone)
+            if d and start <= d.isoformat() <= end:
+                total += i["purchased_price"] or 0
+    return total
+
+
+def period_info(conn, uid: int, period: dict | None = None) -> dict:
+    """What the app needs to show about the current period."""
+    period = period or current_period(conn, uid)
+    me = _settings(conn, uid)
+    today = today_in(user_zone(conn, uid))
+    return {
+        "starts_on": period["starts_on"],
+        "ends_on": period["ends_on"],
+        "budget": period["budget"],
+        "custom": bool(period["custom"]),
+        "default_budget": me["budget"],
+        "reset_day": me["reset_day"],            # None: not chosen yet (the app reminds you)
+        "days_left": (date.fromisoformat(period["ends_on"]) - today).days + 1,
+        "days_total": (date.fromisoformat(period["ends_on"]) - date.fromisoformat(period["starts_on"])).days + 1,
+    }
+
+
+def list_periods(conn, uid: int, limit: int = 24) -> list[dict]:
+    """Saved periods, newest first, each with what was spent in it."""
+    current = current_period(conn, uid)
+    zone = user_zone(conn, uid)
+    items = list_items(conn, uid)
+    rows = conn.execute("SELECT * FROM periods WHERE user_id = ? ORDER BY starts_on DESC LIMIT ?",
+                        (uid, limit)).fetchall()
+    return [{
+        "starts_on": r["starts_on"],
+        "ends_on": r["ends_on"],
+        "budget": r["budget"],
+        "custom": bool(r["custom"]),
+        "spent": _spent_between(items, r["starts_on"], r["ends_on"], zone),
+        "current": r["id"] == current["id"],
+    } for r in rows]
 
 
 # ------------------------------------------------------------------ writes
@@ -482,13 +639,12 @@ def price_history(conn, uid: int, item_id: int) -> list[dict]:
 
 
 def summary(conn, uid: int) -> dict:
-    """The numbers at the top of the app."""
-    budget = get_budget(conn, uid)
+    """The numbers at the top of the app, for the current budget period."""
+    period = current_period(conn, uid)
+    budget = period["budget"]
     items = list_items(conn, uid)
     zone = user_zone(conn, uid)
-    month = _utcnow().astimezone(zone).strftime("%Y-%m")      # this month on MY calendar
-    spent = sum(i["purchased_price"] or 0 for i in items
-                if i["status"] == "purchased" and local_month(i["purchased_at"], zone) == month)
+    spent = _spent_between(items, period["starts_on"], period["ends_on"], zone)
     planned = [i for i in items if i["status"] == "planned" and i["price"] is not None]
     # Walk planned items in priority order and mark which still fit the budget.
     running, fits = spent, {}
@@ -504,7 +660,8 @@ def summary(conn, uid: int) -> dict:
         "budget": budget,
         "planned_total": total,                       # discounted prices only
         "remaining": None if budget is None else budget - spent - total,
-        "spent_this_month": spent,
+        "spent_this_month": spent,                    # this period's (the name is older than periods)
+        "period": period_info(conn, uid, period),
         "mrp_total": mrp_total,
         "savings_vs_mrp": mrp_total - total,
         "planned_count": len(planned),

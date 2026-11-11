@@ -1,6 +1,6 @@
 // Small helpers for turning raw data into friendly text.
 
-import type { Item, RefreshResult } from './types' 
+import type { Item, RefreshResult } from './types'
 
 // "https://www.amazon.in/dp/…" → "Amazon"
 export function storeName(item: Item): string {
@@ -59,6 +59,38 @@ export function refreshNote(r: RefreshResult): string {
   if (r.phone_only > 0) parts.push('Amazon refreshes from your iPhone')
 
   return parts.join(' · ') || 'Nothing to refresh yet'
+}
+
+// Calendar days ("2026-11-25"), worked out without time zones getting in the
+// way: they're already on the person's own calendar.
+export function dayMonth(day: string): string {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
+
+export function addDays(day: string, n: number): string {
+  const [y, m, d] = day.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
+}
+
+// 1 → "1st", 22 → "22nd", 13 → "13th"
+export function ordinal(n: number): string {
+  const tens = n % 100
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'
+  return `${n}${suffix}`
+}
+
+// The same reset rule as the server (services.next_reset_after): the first
+// reset date after `day`; the 29th–31st become a short month's last day.
+export function nextResetAfter(day: string, resetDay: number): string {
+  const [y, m] = day.split('-').map(Number)
+  const clamp = (year: number, month: number) => {
+    const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate() // month is 0-based here
+    return new Date(Date.UTC(year, month, Math.min(resetDay, last))).toISOString().slice(0, 10)
+  }
+  const thisMonth = clamp(y, m - 1)
+  if (thisMonth > day) return thisMonth
+  return m === 12 ? clamp(y + 1, 0) : clamp(y, m)
 }
 
 // "2026-10-05T11:56:46+00:00" → "5 Oct"

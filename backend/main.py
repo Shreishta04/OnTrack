@@ -322,6 +322,10 @@ async def duplicate(_: Request, exc: Duplicate):
 
 class BudgetIn(BaseModel):
     amount: float = Field(..., ge=0, examples=[15000])
+    # "every": the default for every period (and this one); "once": this period only
+    scope: Literal["every", "once"] = "every"
+    # the day each period starts (salary day); None leaves it as it is
+    reset_day: int | None = Field(None, ge=1, le=31, examples=[25])
 
 
 # Length limits: one request shouldn't be able to store megabytes of text
@@ -513,8 +517,19 @@ def get_summary(conn=Depends(get_db), user=Depends(current_user)):
 
 @app.put("/budget")
 def put_budget(body: BudgetIn, conn=Depends(get_db), user=Depends(current_user)):
-    services.set_budget(conn, user["id"], body.amount)
-    return {"budget": body.amount}
+    """Set the budget (for every period, or just this one) and, optionally,
+    the reset day. The day goes first, so the amount lands on the period as
+    it will now run."""
+    if body.reset_day is not None:
+        services.set_reset_day(conn, user["id"], body.reset_day)
+    services.set_budget(conn, user["id"], body.amount, body.scope)
+    return {"budget": body.amount, "period": services.period_info(conn, user["id"])}
+
+
+@app.get("/periods")
+def get_periods(conn=Depends(get_db), user=Depends(current_user)):
+    """Budget periods, newest first, each with its budget and what was spent."""
+    return services.list_periods(conn, user["id"])
 
 
 @app.get("/items")

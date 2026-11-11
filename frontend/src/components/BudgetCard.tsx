@@ -2,6 +2,7 @@ import type { CSSProperties } from 'react'
 import type { Summary } from '../types'
 import { useMoney } from '../money'
 import Price from './Price'
+import { addDays, dayMonth } from '../format'
 
 // Big numbers shrink to fit their space instead of breaking onto a second
 // line: the CSS divides the space available by the number of characters
@@ -21,8 +22,11 @@ interface BudgetCardProps {
 // showing where the budget goes, and the three totals. The whole card is a
 // button that opens the budget editor.
 export default function BudgetCard({ summary, onEdit }: BudgetCardProps) {
-  const { budget, spent_this_month: spent, planned_total: planned, remaining } = summary
+  const { budget, spent_this_month: spent, planned_total: planned, remaining, period } = summary
   const fit = useFit()
+  // "new budget on 25 Nov": the day after this period ends (only once a
+  // reset day is chosen; until then the reminder bar asks for it).
+  const renews = period?.reset_day != null ? ` · new budget on ${dayMonth(addDays(period.ends_on, 1))}` : ''
 
   // No budget set yet: nothing to measure against.
   if (budget == null || remaining == null) {
@@ -52,7 +56,7 @@ export default function BudgetCard({ summary, onEdit }: BudgetCardProps) {
           <span className="hero-amount-box" style={fit(remaining)}>
             <Price amount={Math.abs(remaining)} className="hero-amount" />
           </span>
-          <span className="hero-sub">{over ? 'your wish list is more than what’s left' : 'after your wish list'}</span>
+          <span className="hero-sub">{over ? 'your wish list is more than what’s left' : 'after your wish list'}{renews}</span>
         </span>
         <Ring
           parts={[

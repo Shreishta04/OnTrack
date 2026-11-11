@@ -54,7 +54,7 @@ def _wipe_postgres(url):
     """Start each Postgres test from empty tables, like a fresh SQLite file."""
     import psycopg
     with psycopg.connect(url) as conn:
-        conn.execute("DROP TABLE IF EXISTS status_changes, price_history, links, items, settings, "
+        conn.execute("DROP TABLE IF EXISTS periods, status_changes, price_history, links, items, settings, "
                      "invites, tokens, users CASCADE")
 
 
