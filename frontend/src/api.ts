@@ -7,7 +7,7 @@
 // A header rather than a cookie, because Safari blocks cookies between the
 // web app's site (Vercel) and the server's (Railway).
 
-import type { PeriodRow, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
+import type { PeriodRow, SetupLinks, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
 
 const SERVER_KEY = 'ontrack.server'
 const TOKEN_KEY = 'ontrack.token'
@@ -144,6 +144,7 @@ export const changePassword = (current: string, next: string) =>
 
 export const listTokens = () => request<TokenInfo[]>('/tokens')
 export const createToken = (name: string) => request<DeviceToken>('/tokens', post({ name }))
+export const getSetup = () => request<SetupLinks>('/setup')
 export const revokeToken = (id: number) => request<void>(`/tokens/${id}`, { method: 'DELETE' })
 
 // Owner only

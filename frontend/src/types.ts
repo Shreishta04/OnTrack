@@ -136,3 +136,9 @@ export interface Person {
   created_at: string
   items: number
 }
+
+// GET /setup: the Shortcuts' iCloud links (set on Railway; null until then)
+export interface SetupLinks {
+  add_shortcut_url: string | null
+  refresh_shortcut_url: string | null
+}

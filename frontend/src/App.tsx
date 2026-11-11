@@ -12,6 +12,8 @@ import type { RowAction } from './components/ItemRow'
 import SettingsPage from './components/SettingsPage'
 import AnalyticsPage from './components/AnalyticsPage'
 import BudgetSetup from './components/BudgetSetup'
+import SetupPage from './components/SetupPage'
+import { device, installed, markSetupLater, phoneSetUp, setupLater } from './device'
 import BudgetSheet from './components/BudgetSheet'
 import AuthScreen, { type AuthMode } from './components/AuthScreen'
 import { MoneyProvider } from './money'
@@ -157,6 +159,11 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   const nav = useNav()
   const searching = nav.layer === 'search'
   const [skipped, setSkipped] = useState(setupSkipped)
+  // "Set up this phone" reminder: phones only, until it's done or "Not now".
+  // An Android phone with OnTrack installed is set up (it's in the Share menu).
+  const [phoneLater, setPhoneLater] = useState(setupLater)
+  const kind = device()
+  const phoneNeedsSetup = kind !== 'computer' && !phoneSetUp() && !(kind === 'android' && installed()) && !phoneLater
 
   // Fetch the latest numbers and items (on opening, after a button press,
   // on coming back). Each good answer is saved; with no connection, the
@@ -433,8 +440,13 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
         }}
         onBudgetSaved={load}
         onServerChanged={load}
+        onOpenSetup={() => nav.go('setup')}
       />
     )
+  }
+
+  if (nav.page === 'setup' && me) {
+    return <SetupPage notes={notes} onBack={nav.back} />
   }
 
   if (nav.page === 'analytics' && me) {
@@ -488,6 +500,24 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           </button>
         </div>
       </header>
+      {!needsSetup && phoneNeedsSetup && !offlineSince && summary && (
+        <div className="offline-note setup-note phone-note">
+          <i className="dot dot-setup" />
+          <span className="phone-note-text">
+            Add products by sharing them ·{' '}
+            <button className="link-btn note-action" onClick={() => nav.go('setup')}>Set up this phone</button>
+          </span>
+          <button
+            className="link-btn phone-note-later"
+            onClick={() => {
+              markSetupLater()
+              setPhoneLater(true)
+            }}
+          >
+            Not now
+          </button>
+        </div>
+      )}
       {needsSetup && !offlineSince && (
         <button className="offline-note setup-note" onClick={() => nav.open('budget')}>
           <i className="dot dot-setup" />

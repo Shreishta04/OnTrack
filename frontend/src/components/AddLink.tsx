@@ -2,7 +2,6 @@ import { useState, type FormEvent } from 'react'
 import { addFromLink } from '../api'
 import type { Item } from '../types'
 import { displayName, isAmazon } from '../format'
-import { IPHONE, SHORTCUT_NAME, shortcutLink } from '../shortcut'
 
 interface AddLinkProps {
   onAdded: (item: Item) => Promise<void>
@@ -38,17 +37,6 @@ export default function AddLink({ onAdded, label = 'Add something' }: AddLinkPro
     }
   }
 
-  function addWithIPhone() {
-    const link = url.trim()
-    if (!/^https?:\/\/\S+/i.test(link) && !/\bhttps?:\/\//i.test(link)) {
-      setMessage({ text: 'Paste a product link first.', tone: 'warn' })
-      return
-    }
-    setMessage({ text: `Opening “${SHORTCUT_NAME}”… Come back here once it says Added.`, tone: 'muted' })
-    setUrl('')
-    window.location.href = shortcutLink(link) // the list reloads by itself when you come back
-  }
-
   return (
     <section className="card add-card" aria-label="Add an item">
       <label className="eyebrow" htmlFor="add-link">{label}</label>
@@ -67,11 +55,6 @@ export default function AddLink({ onAdded, label = 'Add something' }: AddLinkPro
           {adding ? 'Adding…' : 'Add'}
         </button>
       </form>
-      {IPHONE && (
-        <button className="btn btn-secondary add-iphone" type="button" disabled={adding} onClick={addWithIPhone}>
-          Add with my iPhone
-        </button>
-      )}
       {message ? (
         <p className={message.tone === 'warn' ? 'budget-note add-msg is-warn' : 'budget-note add-msg'} role="status">
           {message.text}
@@ -88,8 +71,8 @@ function shareHint(): string {
   if (/Android/.test(navigator.userAgent)) {
     return 'Or share a product from any app to OnTrack (once it’s installed). If a store hides its price, add it by hand.'
   }
-  if (IPHONE) {
-    return `“Add with my iPhone” uses your “${SHORTCUT_NAME}” Shortcut, so stores show it their real page and price. Best for Amazon and stores abroad.`
+  if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+    return 'Or share from any app with the “Add to OnTrack” Shortcut: your phone reads the page, which works best for Amazon and stores abroad.'
   }
   return 'Or use the OnTrack browser extension on a product page. For Amazon, the extension or the iPhone works best.'
 }

@@ -8,6 +8,7 @@ import type { ThemePref } from '../hooks/useTheme'
 import { COUNTRIES, CURRENCIES, timeZones } from '../places'
 import { dayMonth, ordinal, shortDate } from '../format'
 import { useEdgeBack } from '../hooks/useEdgeBack'
+import { device, phoneSetUp } from '../device'
 import { useMoney } from '../money'
 import BudgetEditor from './BudgetEditor'
 import Price from './Price'
@@ -25,13 +26,14 @@ interface SettingsPageProps {
   onMe: (me: Me) => void // profile or region saved
   onBudgetSaved: () => Promise<void>
   onServerChanged: () => Promise<void>
+  onOpenSetup: () => void // Set up this phone
 }
 
 type Part = 'profile' | 'budget' | 'region' | 'password' | 'devices' | 'people'
 
 // Settings, as a page of its own (/settings). Each row opens its editor right
 // underneath it; one at a time, so the page never gets long.
-export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, onBudgetSaved, onServerChanged }: SettingsPageProps) {
+export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, onBudgetSaved, onServerChanged, onOpenSetup }: SettingsPageProps) {
   const [open, setOpen] = useState<Part | null>(null)
   const [keyCount, setKeyCount] = useState<number | null>(null)
   const money = useMoney()
@@ -70,6 +72,15 @@ export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, 
         >
           <NameForm me={me} onSaved={onMe} />
         </Row>
+        {/* its own page: the steps differ for iPhone, Android and computers */}
+        <Row
+          icon={<PhoneIcon />}
+          label="Set up this phone"
+          sub={device() === 'computer' ? 'Sharing from your phone, and the browser extension' : 'Add products by sharing them'}
+          value={phoneSetUp() ? 'Done' : undefined}
+          open={false}
+          onToggle={onOpenSetup}
+        />
       </div>
 
       <h2 className="set-heading">Appearance</h2>

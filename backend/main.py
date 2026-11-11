@@ -521,6 +521,24 @@ def remove_token(token_id: int, user=Depends(current_user), conn=Depends(get_db)
     auth.revoke_token(conn, user, token_id)
 
 
+# The iPhone Shortcuts, shared as iCloud links. They live in Railway variables,
+# not in the code, so a new version of a Shortcut only needs a new link there.
+# Only real iCloud Shortcut links are passed on.
+SHORTCUT_LINKS = {"add_shortcut_url": "ONTRACK_SHORTCUT_ADD_URL",
+                  "refresh_shortcut_url": "ONTRACK_SHORTCUT_REFRESH_URL"}
+ICLOUD_SHORTCUT = "https://www.icloud.com/shortcuts/"
+
+
+@app.get("/setup")
+def get_setup(user=Depends(current_user)):
+    """What Settings → Set up this phone needs: the Shortcuts' iCloud links (None until set)."""
+    links = {}
+    for field, variable in SHORTCUT_LINKS.items():
+        value = os.environ.get(variable, "").strip()
+        links[field] = value if value.startswith(ICLOUD_SHORTCUT) else None
+    return links
+
+
 @app.get("/invites")
 def get_invites(user=Depends(current_user), conn=Depends(get_db)):
     return auth.list_invites(conn, user)

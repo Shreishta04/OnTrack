@@ -2272,7 +2272,131 @@ body {
   white-space: pre-wrap;
   font-style: italic;
 }
-.add-iphone {
-  width: 100%;
-  margin-top: 8px;
+
+/* ============================================================
+   Set up this phone (/setup)
+   ============================================================ */
+
+.setup-lead {
+  margin: 0 4px 4px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.setup-lead b {
+  color: var(--text);
+  font-weight: 600;
+}
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+}
+.step-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.step-num {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 700;
+}
+.step.is-done .step-num {
+  background: var(--good-bg, var(--track));
+  color: var(--good-fg, var(--text));
+}
+.step-title {
+  flex: 1;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+.step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 42px; /* lines up with the title, past the number */
+}
+.step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.step-actions .btn {
+  text-decoration: none;
+}
+/* links that look like buttons (the iCloud Shortcut links) */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+a.btn-primary {
+  color: var(--on-accent);
+}
+a.btn-secondary {
+  color: var(--text);
+}
+.how-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.glyph {
+  display: inline-flex;
+  vertical-align: -3px;
+  color: var(--accent);
+}
+.key-fallback summary {
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--muted);
+}
+.key-fallback[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.key-text {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  font-size: 13px;
+  word-break: break-all;
+  user-select: all;
+}
+
+/* the list's "Set up this phone" reminder: text, then Not now on the right */
+.phone-note {
+  justify-content: space-between;
+}
+.phone-note-text {
+  flex: 1;
+}
+.phone-note-later {
+  color: var(--muted);
+  font-size: 13px;
+}
+@media (max-width: 400px) {
+  .step-body {
+    padding-left: 0;
+  }
+}
+.step + .step {
+  margin-top: 6px;
 }

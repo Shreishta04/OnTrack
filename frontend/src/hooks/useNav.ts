@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react'
 // close goes back one entry, the same thing the Back button does. So our own
 // ✕ buttons and the phone's Back can never disagree.
 
-export type Page = 'list' | 'settings' | 'analytics'
+export type Page = 'list' | 'settings' | 'analytics' | 'setup'
 export type Layer = 'add' | 'budget' | 'search' | null
 
 interface Entry {
@@ -21,11 +21,11 @@ interface Entry {
   ours?: boolean // true: we added this entry, so going back stays in the app
 }
 
-const PATHS: Record<Page, string> = { list: '/', settings: '/settings', analytics: '/analytics' }
+const PATHS: Record<Page, string> = { list: '/', settings: '/settings', analytics: '/analytics', setup: '/setup' }
 
 function pageFromPath(): Page {
   const path = window.location.pathname.replace(/\/+$/, '')
-  return path === '/settings' ? 'settings' : path === '/analytics' ? 'analytics' : 'list'
+  return path === '/settings' ? 'settings' : path === '/analytics' ? 'analytics' : path === '/setup' ? 'setup' : 'list'
 }
 
 // What the browser's history says is on screen now.
