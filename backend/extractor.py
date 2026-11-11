@@ -421,30 +421,82 @@ def _walk(node):
             yield from _walk(v)
 
 
-def try_json_ld(soup: BeautifulSoup, url: str) -> Product | None:
-    for script in soup.find_all("script", type="application/ld+json"):
+# Product data written to the schema.org standard (JSON-LD) is how most stores,
+# in India and abroad, describe a product to search engines. The price can sit
+# in several places, depending on the store:
+#   offers.price                          the usual one
+#   offers.lowPrice                       an AggregateOffer (several sellers or sizes)
+#   offers.priceSpecification.price       newer pages (also a list of them)
+#   offers.offers[0].price                an AggregateOffer listing each offer
+# and "offers" can be one offer or a list. A ProductGroup (one product in
+# several sizes or colours) keeps its prices on each variant in hasVariant,
+# which _walk reaches because it visits every nested object.
+PRODUCT_TYPES = {"Product", "ProductGroup", "IndividualProduct", "ProductModel"}
+TRAILING_COMMA = re.compile(r",\s*([}\]])")
+
+
+def _offer_price(offers, depth: int = 0) -> tuple[float | None, dict]:
+    """The price in an offers value, and the offer it came from."""
+    if depth > 3 or not offers:
+        return None, {}
+    if isinstance(offers, list):
+        for offer in offers:
+            price, where = _offer_price(offer, depth + 1)
+            if price is not None:
+                return price, where
+        return None, {}
+    if not isinstance(offers, dict):
+        return None, {}
+    for key in ("price", "lowPrice"):
+        price = parse_price(offers.get(key))
+        if price is not None:
+            return price, offers
+    spec = offers.get("priceSpecification")
+    for s in spec if isinstance(spec, list) else [spec]:
+        if isinstance(s, dict) and (price := parse_price(s.get("price"))) is not None:
+            return price, {**offers, "priceCurrency": offers.get("priceCurrency") or s.get("priceCurrency")}
+    return _offer_price(offers.get("offers"), depth + 1)
+
+
+def _load_json_ld(text: str):
+    """Parse a JSON-LD block. Stores often get small things wrong (a line break
+    inside a string, a comma before the closing bracket, an HTML comment around
+    it), and a strict parser would skip the whole block for that."""
+    text = text.strip()
+    if text.startswith("<!--"):
+        text = text.removeprefix("<!--").removesuffix("-->").strip()
+    for attempt in (text, TRAILING_COMMA.sub(r"\1", text)):
         try:
-            data = json.loads(script.string or "")
+            return json.loads(attempt, strict=False)    # strict=False: allows raw line breaks in strings
         except json.JSONDecodeError:
+            continue
+    return None
+
+
+def try_json_ld(soup: BeautifulSoup, url: str) -> Product | None:
+    named = None    # a product with a name but no price, kept in case nothing better turns up
+    for script in soup.find_all("script", type=re.compile(r"^application/ld\+json", re.I)):
+        data = _load_json_ld(script.string or script.get_text() or "")
+        if data is None:
             continue
         for node in _walk(data):
             types = node.get("@type")
             types = types if isinstance(types, list) else [types]
-            if "Product" not in types:
+            if not PRODUCT_TYPES.intersection(t for t in types if isinstance(t, str)):
                 continue
-            offers = node.get("offers") or {}
-            if isinstance(offers, list):
-                offers = offers[0] if offers else {}
-            price = parse_price(offers.get("price") or offers.get("lowPrice"))
+            price, offer = _offer_price(node.get("offers"))
             image = node.get("image")
             if isinstance(image, list):
                 image = image[0] if image else None
             if isinstance(image, dict):
-                image = image.get("url")
+                image = image.get("url") or image.get("contentUrl")
             if price is not None:
                 return Product(url=url, ok=True, method="json-ld",
-                               title=node.get("name"), price=price, image=image,
-                               currency=offers.get("priceCurrency") or "INR")
+                               title=node.get("name") or (named and named.get("name")),
+                               price=price, image=image or (named and named.get("image")),
+                               currency=offer.get("priceCurrency") or "INR")
+            if named is None and node.get("name"):
+                named = {"name": node.get("name"), "image": image}
     return None
 
 

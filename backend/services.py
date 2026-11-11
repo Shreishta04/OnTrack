@@ -383,15 +383,28 @@ def _log_status(conn, item_id, from_status, to_status):
         (item_id, from_status, to_status, now())
     )
 
-def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
-    """Store the result of one extraction attempt on a link."""
+def _via(p: Product) -> str | None:
+    """Who downloaded the page: 'upload' if the phone or the extension sent one
+    (even when the server then tried as well), else 'server'."""
+    vias = [a["via"] for a in p.attempts or []]
+    return "upload" if "upload" in vias else (vias[-1] if vias else None)
+
+
+def _record_check(conn: sqlite3.Connection, link_id: int, p: Product, keep_error: bool = False) -> None:
+    """Store the result of one extraction attempt on a link.
+
+    keep_error: the refresh found nothing, but the last reading came from the
+    phone, which sees the store the way a shopper does. The server's own
+    failure (a bot-check, the Singapore version of the page) says less than
+    the phone's, so only "when we last tried" is updated."""
     _log_checks(link_id, p)
     if p.ok:
         conn.execute(
             """UPDATE links SET title = COALESCE(?, title), price = ?, mrp = ?,
-                   image = COALESCE(?, image), method = ?, last_checked = ?, last_error = NULL
+                   image = COALESCE(?, image), method = ?, last_checked = ?, last_error = NULL,
+                   read_via = ?
                WHERE id = ?""",
-            (p.title, p.price, p.mrp, p.image, p.method, now(), link_id))
+            (p.title, p.price, p.mrp, p.image, p.method, now(), _via(p), link_id))
         conn.execute(
             "INSERT INTO price_history (link_id, price, mrp, checked_at) VALUES (?, ?, ?, ?)",
             (link_id, p.price, p.mrp, now()))
@@ -404,11 +417,14 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product) -> None:
             "UPDATE links SET url = ? WHERE id = ? AND url != ? AND NOT EXISTS "
             "(SELECT 1 FROM links AS other WHERE other.url = ? AND other.user_id = links.user_id)",
             (real_url, link_id, real_url, real_url))
+    elif keep_error:
+        conn.execute("UPDATE links SET last_checked = ? WHERE id = ?", (now(), link_id))
     else:
         # Keep the last known price; just note that this attempt failed.
         conn.execute(
-            "UPDATE links SET title = COALESCE(title, ?), last_checked = ?, last_error = ? WHERE id = ?",
-            (p.title, now(), p.error, link_id))
+            "UPDATE links SET title = COALESCE(title, ?), last_checked = ?, last_error = ?, read_via = ? "
+            "WHERE id = ?",
+            (p.title, now(), p.error, _via(p), link_id))
     if p.title:
         # Items saved while nothing could be read are named after their URL.
         # The first check that finds a real title renames them (names you
@@ -698,7 +714,7 @@ async def refresh(conn, uid: int, extract_fn: ExtractFn, force: bool = False,
     Database writes happen back on this thread, one at a time.
     """
     delay = REFRESH_DELAY if delay is None else delay
-    query = ("SELECT links.id, links.url, links.price, links.last_checked FROM links "
+    query = ("SELECT links.id, links.url, links.price, links.last_checked, links.read_via FROM links "
              "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' "
              "AND items.user_id = ?")
     params = (uid,)
@@ -723,7 +739,7 @@ async def refresh(conn, uid: int, extract_fn: ExtractFn, force: bool = False,
 
     changes, failed = [], []
     for link, p in results:
-        _record_check(conn, link["id"], p)
+        _record_check(conn, link["id"], p, keep_error=not p.ok and link["read_via"] == "upload")
         if not p.ok:
             failed.append({"link_id": link["id"], "error": p.error})
         elif link["price"] is not None and p.price != link["price"]:

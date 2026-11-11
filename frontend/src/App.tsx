@@ -16,7 +16,7 @@ import BudgetSheet from './components/BudgetSheet'
 import AuthScreen, { type AuthMode } from './components/AuthScreen'
 import { MoneyProvider } from './money'
 import { ChartIcon, CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon } from './components/Icons'
-import { refreshNote, storeName } from './format'
+import { displayName, refreshNote, storeName } from './format'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
 import AddByHand from './components/AddByHand'
@@ -264,6 +264,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     }
     try {
       if (action === 'delete') await deleteItem(item.id)
+      else if (typeof action === 'object') await patchItem(item.id, action.edit) // Edit, or a typed price
       else await patchItem(item.id, { status: action })
       await load()
     } catch (e) {
@@ -294,7 +295,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // Search: keep items whose name or store contains what's typed (any
   // capitals). It searches the tab you're on; the counts stay the full ones.
   const words = searching ? query.trim().toLowerCase() : ''
-  const matches = (i: Item) => !words || `${i.name} ${storeName(i)}`.toLowerCase().includes(words)
+  const matches = (i: Item) => !words || `${displayName(i)} ${storeName(i)}`.toLowerCase().includes(words)
   const visible = sortItems((tab === 'all' ? items : items.filter((i) => i.status === tab)).filter(matches), sort)
 
   function openSearch() {
@@ -348,6 +349,18 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   async function handleBulk(action: BulkAction) {
     if (offlineSince) {
       setNote({ text: 'You’re offline. Changes need a connection.', tone: 'warn' })
+      return
+    }
+    if (action === 'delete') {
+      const n = pickedItems.length
+      try {
+        await Promise.all(pickedItems.map((i) => deleteItem(i.id)))
+        setNote({ text: `Deleted ${n} ${n === 1 ? 'item' : 'items'}.`, tone: 'muted' })
+        setPicked(new Set())
+      } catch (e) {
+        setNote({ text: (e as Error).message, tone: 'warn' })
+      }
+      await load()
       return
     }
     const parkRest = action === 'park-rest'
@@ -566,6 +579,6 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
 // What the note under the header says after an add.
 function addedNote(item: Item): { text: string; tone: 'muted' | 'warn' } {
   return item.needs_price
-    ? { text: `Added “${item.name}”, but couldn’t read its price yet.`, tone: 'warn' }
-    : { text: `Added “${item.name}”.`, tone: 'muted' }
+    ? { text: `Added “${displayName(item)}”, but couldn’t read its price yet.`, tone: 'warn' }
+    : { text: `Added “${displayName(item)}”.`, tone: 'muted' }
 }

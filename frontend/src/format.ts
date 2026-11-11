@@ -2,7 +2,22 @@
 
 import type { Item, RefreshResult } from './types'
 
-// "https://www.amazon.in/dp/…" → "Amazon"
+// Stores whose web address doesn't spell their name nicely.
+const STORE_NAMES: [RegExp, string][] = [
+  [/amazon|amzn/, 'Amazon'],
+  [/victoriassecret/, 'Victoria’s Secret'],
+  [/littlebox/, 'Littlebox'],
+  [/savana/, 'Savana'],
+  [/tiktok/, 'TikTok'],
+  [/tirabeauty/, 'Tira'],
+  [/nykaa/, 'Nykaa'],
+  [/(^|\.)hm\.com/, 'H&M'],
+  [/ajio/, 'AJIO'],
+  [/shein/, 'SHEIN'],
+  [/bathandbodyworks/, 'Bath & Body Works'],
+]
+
+// "https://www.amazon.in/dp/…" → "Amazon"; "coach.in" → "Coach"
 export function storeName(item: Item): string {
   const url = item.links[0]?.url
   if (!url) return 'Added by hand'
@@ -12,11 +27,18 @@ export function storeName(item: Item): string {
   } catch {
     return 'Link'
   }
-  if (host.includes('amazon') || host.includes('amzn')) return 'Amazon'
-  if (host.includes('littlebox')) return 'Littlebox'
-  if (host.includes('savana')) return 'Savana'
+  const known = STORE_NAMES.find(([pattern]) => pattern.test(host))
+  if (known) return known[1]
   const base = host.split('.')[0]
   return base.charAt(0).toUpperCase() + base.slice(1)
+}
+
+// An item saved while the store showed nothing is named after its link
+// until a check finds the real name. Show "Amazon item" instead of
+// "https://www.amazon.com/dp/B0…". (The server keeps the link as the name,
+// because that's how it knows to rename it later.)
+export function displayName(item: Item): string {
+  return item.name.startsWith('http') ? `${storeName(item)} item` : item.name
 }
 
 export function isAmazon(url: string | undefined): boolean {
@@ -42,7 +64,7 @@ export function stuckTip(item: Item): string {
   if (isAmazon(item.links[0]?.url)) {
     return 'Tap Refresh OnTrack on your iPhone, or share this product from there: the name, photo and price fill in by themselves.'
   }
-  return 'OnTrack will try again on the next refresh. Or delete it and use Add by hand with your own price.'
+  return 'Type the price below, or OnTrack tries again on the next refresh.'
 }
 
 // The short note after tapping refresh, e.g. "Checked 4 · 1 price dropped".

@@ -8,6 +8,7 @@ Then open http://127.0.0.1:8000/docs to try every endpoint in the browser.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -18,13 +19,14 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, HttpUrl
 
 import socket
 
 import auth
 import db
+import replies
 import services
 from extractor import UnsafeURL, check_public_url
 from services import Duplicate, NotFound
@@ -247,6 +249,37 @@ async def log_request_start(request: Request, call_next):
     return response
 
 
+# Errors for the iPhone Shortcuts. A Shortcut that asks for ?reply=text gets
+# one plain sentence it can show as a notification, for every error, including
+# the ones answered before a route runs (wrong key, too big, too many).
+# This is added last, so it's the outermost layer and sees all of them.
+#
+# It also notes the details of an upload the server couldn't take apart
+# ("Invalid multipart data."): how it was labelled and how big it was, so the
+# log shows what the phone actually sent. Never the key or the page itself.
+@app.middleware("http")
+async def shortcut_errors(request: Request, call_next):
+    response = await call_next(request)
+    as_text = replies.wants_text(request.query_params)
+    upload = request.url.path.endswith("/from-html")
+    if response.status_code < 400 or not (as_text or upload) \
+            or not response.headers.get("content-type", "").startswith("application/json"):
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        detail = None
+    detail = detail if isinstance(detail, str) else None      # 422s carry a list of problems
+    if upload and response.status_code == 400 and detail and "multipart" in detail.lower():
+        log.warning('upload   unreadable form  path=%s  content-type="%s"  length=%s  agent="%s"',
+                    request.url.path, request.headers.get("content-type", "-")[:120],
+                    request.headers.get("content-length", "-"), request.headers.get("user-agent", "-")[:80])
+    if as_text:
+        return PlainTextResponse(replies.error(response.status_code, detail), status_code=response.status_code)
+    return Response(body, status_code=response.status_code, headers=dict(response.headers))
+
+
 # --------------------------------------------------------------- dependencies
 
 def get_db():
@@ -311,7 +344,14 @@ async def bad_request(_: Request, exc: auth.BadRequest):
 
 
 @app.exception_handler(Duplicate)
-async def duplicate(_: Request, exc: Duplicate):
+async def duplicate(request: Request, exc: Duplicate):
+    if replies.wants_text(request.query_params):          # the Shortcut: "Already on your list · …"
+        conn = db.connect()
+        try:
+            row = conn.execute("SELECT name FROM items WHERE id = ?", (exc.item_id,)).fetchone()
+        finally:
+            conn.close()
+        return PlainTextResponse(replies.duplicate(row["name"] if row else None), status_code=409)
     return JSONResponse(status_code=409, content={
         "detail": "This link is already saved.", "item_id": exc.item_id, "link_id": exc.link_id})
 
@@ -553,16 +593,20 @@ def post_from_link(body: FromLinkIn, conn=Depends(get_db), user=Depends(current_
 
 
 @app.post("/items/from-html", status_code=201)
-def post_from_html(url: HttpUrl = Form(...), html: UploadFile = File(...),
+def post_from_html(request: Request, url: HttpUrl = Form(...), html: UploadFile = File(...),
                    name: str | None = Form(None, max_length=NAME_MAX), priority: int = Form(0),
                    conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract)):
-    """The phone fetched the page and uploads it here. Non-Amazon pages fall back to a server fetch."""
+    """The phone fetched the page and uploads it here. Non-Amazon pages fall back to a server fetch.
+    With ?reply=text the answer is one sentence for the Shortcut's notification."""
     page = html.file.read().decode("utf-8", errors="replace")
     if not page.strip():
         raise HTTPException(status_code=422, detail="The uploaded page is empty")
     extract_fn = services.extract_from_html(page, fallback=extract)
     item_id = services.create_item_from_link(conn, user["id"], str(url), extract_fn, name, priority)
-    return services.item_view(conn, user["id"], item_id)
+    item = services.item_view(conn, user["id"], item_id)
+    if replies.wants_text(request.query_params):
+        return PlainTextResponse(replies.item_added(item, user["currency"]), status_code=201)
+    return item
 
 
 @app.post("/items", status_code=201)
@@ -627,9 +671,16 @@ def get_phone_refresh_list(force: bool = False, conn=Depends(get_db), user=Depen
 
 
 @app.post("/links/{link_id}/from-html")
-def post_link_from_html(link_id: int, html: UploadFile = File(...), conn=Depends(get_db), user=Depends(current_user)):
-    """Upload a freshly downloaded page for one link; records the new price."""
+def post_link_from_html(request: Request, link_id: int, html: UploadFile = File(...),
+                        conn=Depends(get_db), user=Depends(current_user)):
+    """Upload a freshly downloaded page for one link; records the new price.
+    With ?reply=text: one line, like "Kurta: ↓ ₹899 (was ₹999)"."""
     page = html.file.read().decode("utf-8", errors="replace")
     if not page.strip():
         raise HTTPException(status_code=422, detail="The uploaded page is empty")
-    return services.refresh_link_from_html(conn, user["id"], link_id, page)
+    result = services.refresh_link_from_html(conn, user["id"], link_id, page)
+    if replies.wants_text(request.query_params):
+        row = conn.execute("SELECT items.name FROM links JOIN items ON items.id = links.item_id "
+                           "WHERE links.id = ?", (link_id,)).fetchone()
+        return PlainTextResponse(replies.link_checked(row["name"] if row else None, result, user["currency"]))
+    return result
