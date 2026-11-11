@@ -43,7 +43,8 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 
 **Saving items**
 - **Share from the iPhone → item saved** with name, current price, MRP and image, via an iOS Shortcut in the Share Sheet. It also takes a link buried in text (Instagram, WhatsApp, the Google app's *"Source: … share.google/…"*), and answers with a **normal iPhone notification** (*"Added to OnTrack · Coach Tabby Bag · $450"*, *"Already on your list · …"*, *"Added, but no price yet"*), not JSON
-- **Add with my iPhone:** on an iPhone, the add box has a second button that hands the pasted link to the Shortcut, so the **phone** downloads the store's page. Pasting alone makes the server download it from Singapore, which many stores block or answer with another country's page
+- **Set up this phone** (Settings, and a reminder on phones until it's done): the right steps for the device. **iPhone:** Add to Home Screen (a picture guide; websites can't do it themselves) → **Get the Shortcuts** (iCloud links, no key inside) → **Connect** (OnTrack makes this phone's key and hands it to the Shortcut, which saves it; the Shortcuts app opens once and asks to Allow) → share. **Android:** an **Install OnTrack** button, and it's in the Share menu, no keys. **Computer:** how to add the browser extension
+- **On an iPhone, share rather than paste:** sharing makes the **phone** download the store's page, the way a shopper sees it. Pasting a link makes the server download it from Singapore, which many stores block or answer with another country's page
 - **Paste a link** (laptop / API) → same result, with the server fetching the page itself
 - **One item, several stores:** e.g. the same watch on Amazon and Fastrack. Only the **cheapest** link counts toward the budget, so items are never counted twice
 - **Duplicate detection:** the same product shared twice, even via a short link or with different tracking junk, is rejected. Amazon, Savana and Flipkart links are reduced to just the part that identifies the product
@@ -678,7 +679,8 @@ The first person outside India tried OnTrack. Coach, Target, Amazon, Littlebox, 
 **1. The server is in Singapore, and he wasn't.**
 - *Symptom:* Amazon showed a bot-check; a TikTok link saved as **"TikTok Shop Singapore"**.
 - *Cause:* pasting a link makes the **server** download the page. Big stores block cloud servers, and stores that change by country saw a visitor from Singapore, so TikTok sent its Singapore home page.
-- *Fix:* the phone downloads the page instead. That already worked through the Shortcut (Amazon US came in at once, $26.59 with MRP and photo), so the app now has an **Add with my iPhone** button that hands the pasted link to the Shortcut (`shortcuts://run-shortcut?name=Add to OnTrack&input=text&text=<link>`). A web page can't download another site's page itself: browsers forbid it (CORS).
+- *Fix:* the phone downloads the page instead. That already worked through the Shortcut (Amazon US came in at once, $26.59 with MRP and photo), so sharing is the iPhone path. A web page can't download another site's page itself: browsers forbid it (CORS).
+- *Tried and removed:* an **Add with my iPhone** button that handed a pasted link to the Shortcut (`shortcuts://run-shortcut?name=Add to OnTrack&input=text&text=<link>`). It worked, but iOS can only start a Shortcut from a web page by **opening the Shortcuts app**, and can't come back into the home-screen app afterwards (a return link opens Safari). Leaving the app to add an item felt wrong, so it went (`feature/no-shortcut-jump`). Sharing runs inside the share sheet and never leaves the page; a real app later can download pages itself.
 
 **2. "The URL "Source: Victoria's Se…" is missing a hostname."**
 - *Cause:* the Google app's share button sends text with a Google short link inside, and my Shortcut had lost its *Get URLs from Input* step, so it took the text itself as the link.
@@ -703,6 +705,28 @@ The first person outside India tried OnTrack. Coach, Target, Amazon, Littlebox, 
 - *Symptom:* the Google app's share icon → the server couldn't take the uploaded form apart. Copying the link and running the Shortcut worked.
 - *Not solved yet:* I couldn't reproduce it (odd file names were all accepted). The server now logs how such an upload was labelled and how big it was (never the key or the page), so the next one shows the cause.
 
+### 38. Setting up a friend's phone took an evening
+
+Getting the Shortcut onto my friend's iPhone meant: sending an iCloud link with **my** key inside, him making his own key, finding the three places to paste it, editing actions when the Shortcut was out of date, and a share icon that sent the wrong thing. Too much for anyone who isn't me.
+
+**1. The key lived inside the Shortcut.**
+- *Problem:* every copy had to be edited, and a shared link carried my key.
+- *Fix:* the Shortcuts read the key from a file on the phone (`Shortcuts/OnTrack/key.txt`). **Connect** in *Set up this phone* makes a key for that phone and hands it to the Shortcut through `shortcuts://run-shortcut?name=Add to OnTrack&input=text&text=ontrack-key:<key>`; the Shortcut sees the prefix, saves the file and says "OnTrack is connected". The shared Shortcuts contain no key, and a new version keeps working without reconnecting.
+- *Trade-off:* this opens the Shortcuts app once, which I'd rejected for *adding* items (Challenge 37). For a one-time setup it's fine; iOS also asks once to Allow saving the file. If the Shortcut doesn't open, the key can be copied instead.
+
+**2. Different phones need different steps.**
+- *Fix:* the page checks the device. iPhone: Home Screen guide, Shortcuts, Connect. Android: Chrome's own install offer (`beforeinstallprompt`), caught when the app starts and shown behind an **Install OnTrack** button, because an installed OnTrack is already in Android's Share menu. Computer: the extension.
+
+**3. People wouldn't find the page.**
+- *Fix:* a reminder on phones (*"Add products by sharing them · Set up this phone"*, with *Not now*) until it's done, and a row at the top of Settings. "Done" is remembered on the phone, since it's about the device, not the account.
+
+**4. Where the Shortcut links live.**
+- *Fix:* Railway variables, served by `GET /setup`, which only passes on real `https://www.icloud.com/shortcuts/` links. Updating a Shortcut means a new link on Railway, not a code change.
+
+**5. Testing a link to another app.**
+- *Problem:* headless Chrome can't open `shortcuts://`, and the tab is stuck half-way afterwards.
+- *Fix:* the test records the link the page tried to open (it must carry the new key), then continues in a fresh tab of the same "phone", the way the real app comes back from Shortcuts.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -716,7 +740,7 @@ The first person outside India tried OnTrack. Coach, Target, Amazon, Littlebox, 
 - **Two taps to refresh everything:** *Refresh OnTrack* for Amazon, ↻ for other stores. Planned: the Shortcut calls `/refresh` at the end, so one tap covers both.
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
 - **Periods are monthly only.** Weekly or yearly periods are parked.
-- **Target and Victoria's Secret US** don't give a price yet (their prices aren't in the standard product data). **Add with my iPhone** needs the Shortcut to be named exactly *Add to OnTrack*, and leaves you in the Shortcuts app afterwards (switch back to OnTrack; the list reloads by itself).
+- **Target and Victoria's Secret US** don't give a price yet (their prices aren't in the standard product data). On an iPhone, a copied link that can't be shared goes through the server; for stores that block it, copy the link and run *Add to OnTrack* from its Home Screen icon (it reads the clipboard).
 - **Deleting has no undo yet**; that's what the "are you sure?" is for until the recycle bin.
 - **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
 - **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
@@ -918,29 +942,47 @@ python extractor.py -f links.txt --debug     # --debug saves each fetched page t
 5. **To use the web app on the phone too:** start it with `npm run dev -- --host`, add `http://<IP>:5173` to `ONTRACK_CORS_ORIGINS` in `backend/.env` (restart uvicorn), open `http://<IP>:5173` on the phone, and set Settings → server to `http://<IP>:8000`.
 6. **If the server goes silent:** run `netstat -ano | findstr :8000` *before* restarting. More than one `LISTENING` line means an old server is still running: stop it with `taskkill /PID <number> /F`. Stop uvicorn with the terminal's trash icon rather than `Ctrl+C`.
 
-The **Add to OnTrack** Shortcut (shown in the Share Sheet). **Name it exactly `Add to OnTrack`**: the app's *Add with my iPhone* button opens it by that name.
+The two Shortcuts **read the device key from a file on the phone** (`Shortcuts/OnTrack/key.txt`), which **Settings → Set up this phone → Connect** writes. So the Shortcuts themselves contain no key, and the same iCloud link works for everyone.
+
+The **Add to OnTrack** Shortcut (shown in the Share Sheet; also handy as a Home Screen icon for copied links). **Name it exactly `Add to OnTrack`**: *Connect* opens it by that name.
 
 | # | Action | Setting |
 |---|---|---|
-| 1 | Receive URLs and Text from Share Sheet | If there's no input: **Get Clipboard** (for stores with their own share menu: Copy Link, then run the Shortcut) |
-| 2 | Get URLs from Input | Pulls every link out of a shared message |
-| 3 | Get Item from List | **Last** item **from URLs** (step 2's result, not Shortcut Input). Google puts the real link last; Amazon's two copies are identical |
-| 4 | Get Contents of URL | Item from List → downloads the page on the phone |
-| 5 | Get Contents of URL | `http://<IP>:8000/items/from-html?reply=text` · POST · header `X-API-Key` · Form body: `url` (Text) = Item from List, `html` (File) = page from step 4 |
-| 6 | Show Notification | Contents of URL: one sentence from the server (`?reply=text`). Without `?reply=text` the server answers JSON as before, handy with **Show Content** when debugging |
+| 1 | Receive **Text and URLs** from Share Sheet | If there's no input: **Get Clipboard** |
+| 2 | If | Shortcut Input **begins with** `ontrack-key:` (this is *Connect* handing over the key) |
+| 3 | ↳ Replace Text | `ontrack-key:` with nothing, in Shortcut Input |
+| 4 | ↳ Save File | Updated Text · **Ask Where to Save: off** · folder **Shortcuts** · subpath `OnTrack/key.txt` · **Overwrite If File Exists: on** |
+| 5 | ↳ Show Notification | `OnTrack is connected` |
+| 6 | ↳ Stop This Shortcut | |
+| 7 | End If | (delete the empty *Otherwise*) |
+| 8 | Get File | from **Shortcuts** · path `OnTrack/key.txt` · **Error If Not Found: off** |
+| 9 | If | File **does not have any value** |
+| 10 | ↳ Show Notification | `Open OnTrack → Settings → Set up this phone → Connect` |
+| 11 | ↳ Stop This Shortcut | |
+| 12 | End If | |
+| 13 | Get Text from Input | File (the key as text) |
+| 14 | Get URLs from Input | **Shortcut Input** (pulls every link out of a shared message) |
+| 15 | Get Item from List | **Last** item from **URLs** (Google puts the real link last) |
+| 16 | Get Contents of URL | Item from List → downloads the page on the phone |
+| 17 | Get Contents of URL | `…/items/from-html?reply=text` · POST · header `X-API-Key` = **Text** (step 13) · Form body: `url` (Text) = Item from List, `html` (File) = Contents of URL (step 16) |
+| 18 | Show Notification | Contents of URL: one sentence from the server |
 
 The **Refresh OnTrack** Shortcut (run directly, or daily with an iOS Automation):
 
 | # | Action | Setting |
 |---|---|---|
-| 1 | Get Contents of URL | `GET http://<IP>:8000/refresh/phone-list` · header `X-API-Key` (add `?force=true` to ignore the one-hour cooldown while testing) |
-| 2 | Repeat with Each | item in the list from step 1 |
-| 3 | ↳ Get Dictionary Value | `url` in Repeat Item |
-| 4 | ↳ Get Dictionary Value | `link_id` in Repeat Item |
-| 5 | ↳ Get Contents of URL | the `url` value → downloads the Amazon page on the phone |
-| 6 | ↳ Get Contents of URL | `http://<IP>:8000/links/<link_id>/from-html?reply=text` · POST · header `X-API-Key` · Form body: `html` (**File**, not Text) = page from step 5 |
-| 7 | End Repeat | |
-| 8 | Show Notification | Repeat Results: one line per item, like *"Fastrack Ryz Watch: ↓ ₹1,799 (was ₹1,999)"* (step 1 stays JSON: the Shortcut reads it) |
+| 1 | Get File | from **Shortcuts** · path `OnTrack/key.txt` · Error If Not Found: off |
+| 2 | Get Text from Input | File |
+| 3 | Get Contents of URL | `GET …/refresh/phone-list` · header `X-API-Key` = **Text** (add `?force=true` to ignore the one-hour cooldown while testing) |
+| 4 | Repeat with Each | item in Contents of URL |
+| 5 | ↳ Get Dictionary Value | `url` in Repeat Item |
+| 6 | ↳ Get Dictionary Value | `link_id` in Repeat Item |
+| 7 | ↳ Get Contents of URL | the `url` value → downloads the Amazon page on the phone |
+| 8 | ↳ Get Contents of URL | `…/links/<link_id>/from-html?reply=text` · POST · header `X-API-Key` = **Text** · Form body: `html` (**File**) = page from step 7 |
+| 9 | End Repeat | |
+| 10 | Show Notification | Repeat Results: one line per item |
+
+**Sharing them:** Shortcut → ⋯ → Share → **Copy iCloud Link**. There's no key inside, so the link is safe to give anyone. Put the links in Railway → Variables as `ONTRACK_SHORTCUT_ADD_URL` and `ONTRACK_SHORTCUT_REFRESH_URL`; *Set up this phone* shows them. A new version of a Shortcut is just a new link there, and people stay connected, because the key file stays on their phone.
 
 **Who refreshes what:**
 
@@ -977,6 +1019,7 @@ All endpoints except `/health` and `/auth/signup|login|reset` need a login token
 | `POST` | `/users/{id}/reset` | Owner: a one-time password-reset code (2 days) |
 | `GET` | `/summary` | This period (dates, days left, budget, default, reset day), discounted total, spent this period, remaining, savings vs MRP, what fits, all items |
 | `PUT` | `/budget` | Set the budget (`amount`; `scope`: `every` for the default or `once` for this period only; optional `reset_day` 1–31). Answers with the current period |
+| `GET` | `/setup` | The Shortcuts' iCloud links for *Set up this phone* (from Railway variables) |
 | `GET` | `/periods` | Saved periods, newest first, each with its budget and what was spent in it |
 | `GET` | `/items?status=` | List items: `planned`, `later`, `purchased` or `all` (default) |
 | `GET` | `/items/{id}` | One item with its links |
@@ -1007,7 +1050,7 @@ OnTrack/
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock): 220, most run on SQLite and Postgres
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock): 222, most run on SQLite and Postgres
 │   ├── requirements.txt   exact versions the server runs with (Railway installs these)
 │   ├── requirements-dev.txt  the same plus pytest and httpx, for running the tests
 │   └── .env.example       settings template (real .env is git-ignored)
@@ -1026,8 +1069,8 @@ OnTrack/
         ├── money.tsx          the person's currency symbol and digit grouping, for every <Price>
         ├── places.ts          countries, currencies, time zones; first guesses from the device
         ├── types.ts           shapes of the data the backend sends
+        ├── device.ts          iPhone / Android / computer, installed or not, Android's install offer, "this phone is set up", the Connect link
         ├── format.ts          store names (Victoria's Secret, not Victoriassecret), "Amazon item" for unnamed items, short dates, plain-words errors and tips
-        ├── shortcut.ts        "Add with my iPhone": opens the Add to OnTrack Shortcut with the link
         ├── sort.ts            the four sort orders, remembered on this device
         ├── tabs.ts            the four tabs, left to right
         ├── index.css          design tokens (light + dark), layout, components
@@ -1041,7 +1084,8 @@ OnTrack/
         └── components/
             ├── BudgetCard.tsx     the espresso card: what's left, the ring, the three totals
             ├── Price.tsx          every amount, drawn the same way, in the person's currency
-            ├── AddLink.tsx        paste-a-link box (+ "Add with my iPhone" on iPhones)
+            ├── SetupPage.tsx      /setup: "Set up this phone", with steps for iPhone, Android or a computer
+            ├── AddLink.tsx        paste-a-link box
             ├── AddByHand.tsx      name, optional link, price
             ├── AddSheet.tsx       the phone's add sheet, behind the + button
             ├── SelectionBar.tsx   ticked items: live total, left / over, bulk moves and Delete, "are you sure?" for 5+ bought and every delete
@@ -1077,9 +1121,9 @@ OnTrack/
 - [x] Clean Savana links to `/details/<id>?vid=<colour>` for reliable duplicate detection
 - [x] iOS Shortcut: "Refresh OnTrack" refreshes Amazon prices through the phone
 - [ ] One-tap refresh: the Shortcut also triggers the server's `/refresh` for other stores
+- [x] Set up this phone: Home Screen guide, Shortcuts by link, Connect without typing a key (iPhone), Install button (Android)
 - [ ] Daily automatic refresh with an iOS Automation (after deployment, so it works on any network)
 - [x] Shortcut: replace the raw JSON reply with a short notification (`?reply=text`)
-- [x] Add with my iPhone: the app hands a pasted link to the Shortcut
 - [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
 - [x] Backend fixes from phone testing: no database lock during downloads, 25 s limit per add, request-start logging, stuck links rescued (share again or Refresh), Flipkart duplicates
 - [x] Stuck rows explain why and how to fix them; Add by hand (name, price, optional link); typed prices labelled; store letters; short links corrected after a check
@@ -1214,3 +1258,5 @@ OnTrack/
 - **11 Nov 2026:** merged as PR #19 and deployed; picked my reset day on the phone. Railway's trial ends today: the Free option only appears once it has
 - A friend in the US tried it: no prices anywhere (Challenge 37). Fixed the Shortcut (*Get URLs from Input*), and Coach India and VS India came in through the phone
 - `feature/fix-items`: plain-sentence Shortcut replies (`?reply=text`), **Add with my iPhone**, type a price, Edit, Delete in the tick bar, more ways of reading the standard price data, proper store names, "Amazon item" for unnamed items, refresh no longer overwriting the phone's result, and logging for "Invalid multipart data". 24 new tests (220 pass on SQLite and Postgres; 11 fail on the old code), 28 new browser checks plus the 200 earlier ones
+- Merged as PR #20. On the phone, *Add with my iPhone* worked but jumped to the Shortcuts app every time, so it was removed again (Challenge 37); sharing stays the iPhone path
+- `feature/easy-setup` (includes that removal): **Set up this phone** for iPhone, Android and computers, a reminder on phones, the Shortcuts reading their key from a file written by **Connect**, and `GET /setup` with the Shortcut links from Railway variables (Challenge 38). 222 tests pass on SQLite and Postgres; 29 new browser checks plus the 228 earlier ones

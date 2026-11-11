@@ -69,8 +69,8 @@ src/
 ├── money.tsx          the person's currency: symbol and digit grouping, shared through a React context
 ├── places.ts          countries, currencies, time zones, and first guesses from the device
 ├── types.ts           TypeScript shapes of the data the backend sends
+├── device.ts          which device (iPhone / Android / computer), installed or not, Android's install offer, the Connect link
 ├── format.ts          store names ("Amazon", "Victoria's Secret"), "Amazon item" for unnamed items, short dates ("5 Oct"), plain-words errors and tips, period dates (the server's reset rule, copied)
-├── shortcut.ts        "Add with my iPhone": the shortcuts:// link that runs Add to OnTrack with a link
 ├── sort.ts            the four sort orders (newest, oldest, price both ways), remembered on this device
 ├── tabs.ts            the four tabs, left to right (shared by the tabs, swiping and the slide direction)
 ├── index.css          design tokens (light + dark), layout and component styles
@@ -88,7 +88,8 @@ src/
     ├── BudgetSetup.tsx    "Set up your budget": shown after logging in while the budget or reset day is missing
     ├── AnalyticsPage.tsx  /analytics: this period, six periods as bars against the budget, past periods, spend by store
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
-    ├── AddLink.tsx        paste-a-link box, plus "Add with my iPhone" on iPhones (the phone downloads the page, not the server)
+    ├── SetupPage.tsx      /setup: Set up this phone (different steps per device)
+    ├── AddLink.tsx        paste-a-link box (the server downloads the page; on an iPhone, sharing with the Shortcut is better)
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
     ├── AddSheet.tsx       the phone's add sheet: both add forms, behind the + button
     ├── SelectionBar.tsx   ticked items on any tab: live total, left / over (Wish list, Later), the right buttons per tab, "are you sure?" for 5+ bought, Delete on every tab (always asks)
@@ -114,7 +115,7 @@ src/
 
 ## Pages and the Back button
 
-There are three pages, `/` (the list), `/settings` and `/analytics`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
+There are four pages, `/` (the list), `/settings`, `/analytics` and `/setup`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
 
 - Opening a page or a sheet adds one history entry (`history.pushState`); closing it (✕, Save, Escape) goes back one entry, exactly what the phone's Back does. So the phone's Back button or swipe closes a sheet, and returns from Settings or Analytics to the list.
 - The pushes happen in click handlers, never in effects: React's development mode runs effects twice, which would push two entries.

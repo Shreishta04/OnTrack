@@ -161,3 +161,16 @@ def test_old_links_table_gets_read_via(client):
     db.init(conn)
     assert "read_via" in db.columns(conn, "links")
     conn.close()
+
+
+# ------------------------------------------------- Set up this phone (links)
+
+def test_setup_links_come_from_railway_variables(client, monkeypatch):
+    monkeypatch.delenv("ONTRACK_SHORTCUT_ADD_URL", raising=False)
+    monkeypatch.delenv("ONTRACK_SHORTCUT_REFRESH_URL", raising=False)
+    assert client.get("/setup", headers=H).json() == {"add_shortcut_url": None, "refresh_shortcut_url": None}
+    monkeypatch.setenv("ONTRACK_SHORTCUT_ADD_URL", " https://www.icloud.com/shortcuts/abc123 ")
+    monkeypatch.setenv("ONTRACK_SHORTCUT_REFRESH_URL", "https://evil.example/shortcuts/x")   # not iCloud: ignored
+    assert client.get("/setup", headers=H).json() == {
+        "add_shortcut_url": "https://www.icloud.com/shortcuts/abc123", "refresh_shortcut_url": None}
+    assert client.get("/setup").status_code == 401
