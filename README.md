@@ -727,6 +727,45 @@ Getting the Shortcut onto my friend's iPhone meant: sending an iCloud link with 
 - *Problem:* headless Chrome can't open `shortcuts://`, and the tab is stuck half-way afterwards.
 - *Fix:* the test records the link the page tried to open (it must carry the new key), then continues in a fresh tab of the same "phone", the way the real app comes back from Shortcuts.
 
+### 39. Fixing readers store by store, without breaking the others
+
+Every store hides its price differently, and a fix for one store could quietly break another. And without real pages I'd only be guessing how each store writes its price.
+
+**1. Real pages as permanent tests.**
+- *How:* I save a product page (incognito → Ctrl+U → Ctrl+S, so no account details are in it), it goes into `backend/tests/pages/` gzipped, and `test_store_pages.py` gets one row saying what must come out: the name, the price, the MRP, or the explanation. Every test run checks every store. A guard test fails if a page is added without its row.
+- *Catch:* saving from the **view-source** tab gives Chrome's page of numbered lines, not the page. The original is rebuilt from it (each `td.line-content` is one line).
+- *Catch 2:* Ctrl+U shows the source of whatever is open in that tab. My first batch was mostly **home pages** (amazon.in, myntra.com…), with no product in them, so only three were usable.
+
+**2. "Probably loads its price with JavaScript" was often wrong.**
+- *Meesho:* the product was **out of stock**, and the page says so (`"availability": "OutOfStock"`) and leaves the price out. The card now says *"Out of stock: the store shows no price for it right now. OnTrack keeps checking."*
+- *Victoria's Secret India:* the link was a **category page**, an `ItemList` of products. The card now says it's a list and to open one product.
+- *Careful:* product pages often include "you may also like" lists, so a page counts as a list only when it has a list **and no product**; breadcrumbs don't count. Tests for both.
+- *Home pages:* a link to the shop itself (path `/`) now says *"This is the shop's home page, not a product."*
+
+**3. One reader for the data most shops hide in their pages.**
+- *Research:* scraping write-ups and Stack Overflow show where shops keep product data: Myntra in `window.__myx` → `pdpData` (name, `mrp`, and the selling price inside each size as `discountedPrice`), Flipkart and others in `window.__INITIAL_STATE__`, AJIO and Nykaa in `__PRELOADED_STATE__`, Next.js shops in `<script id="__NEXT_DATA__">`. Target is the exception: its price **isn't in the page at all**, it's fetched afterwards from Target's own service, so no page reader can see it.
+- *Fix:* `try_embedded` finds those JSON blobs (also when they're written as `JSON.parse("…")`), walks them, and picks the product whose **name matches the page's own title** (60% of its words or more), so a "you may also like" item or a home page full of products can't win. The selling price can be a number, a string like "₹1,299", or a little object (`{"value": 61999}`); the MRP only counts when it's higher than the price. Plus readers for microdata (`itemprop="price"`) and Twitter's price tags.
+- *Proof it doesn't invent prices:* five of my saved **home pages** (Myntra, Nykaa, Flipkart, Target, Savana) are tests too: each is full of products and prices, and must come out with no price and the home-page message.
+- *Honest limit:* the shapes are tested with pages built from those write-ups. A store's own saved product page is the final word, and each one I save gets a row.
+
+### Store scoreboard
+
+How each store does, from real pages and real use. Pasting a link = the server downloads it from Singapore; sharing from the phone = the phone downloads it.
+
+| Store | Pasting a link | Sharing from the phone | Test page |
+|---|---|---|---|
+| Amazon (.in / .com) | ❌ bot-check | ✅ | – |
+| Flipkart | ✅ (no MRP) | ✅ | – |
+| Littlebox (Shopify) | ✅ | ✅ | ✅ |
+| Coach India | ? | ✅ | – |
+| Victoria's Secret India | ? | ✅ (product pages) | ✅ list page → explained |
+| Meesho | ? | out of stock → explained | ✅ |
+| Savana | ❌ blocked (471) | ? | – |
+| Target | ❌ | ❌ the price isn't in the page (loaded from Target's own service) | home page ✅ (no invented price) |
+| VS US, Coach US | ❌ | ❌ no price yet | waiting for pages |
+| Myntra, AJIO, Nykaa, Flipkart (MRP) | ? | new embedded-data reader, to confirm | home pages ✅, product pages waiting |
+| Tira | ? | ? | waiting for pages |
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -1050,7 +1089,7 @@ OnTrack/
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock): 222, most run on SQLite and Postgres
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock) plus real saved store pages in tests/pages/: 243, most run on SQLite and Postgres
 │   ├── requirements.txt   exact versions the server runs with (Railway installs these)
 │   ├── requirements-dev.txt  the same plus pytest and httpx, for running the tests
 │   └── .env.example       settings template (real .env is git-ignored)
@@ -1260,3 +1299,5 @@ OnTrack/
 - `feature/fix-items`: plain-sentence Shortcut replies (`?reply=text`), **Add with my iPhone**, type a price, Edit, Delete in the tick bar, more ways of reading the standard price data, proper store names, "Amazon item" for unnamed items, refresh no longer overwriting the phone's result, and logging for "Invalid multipart data". 24 new tests (220 pass on SQLite and Postgres; 11 fail on the old code), 28 new browser checks plus the 200 earlier ones
 - Merged as PR #20. On the phone, *Add with my iPhone* worked but jumped to the Shortcuts app every time, so it was removed again (Challenge 37); sharing stays the iPhone path
 - `feature/easy-setup` (includes that removal): **Set up this phone** for iPhone, Android and computers, a reminder on phones, the Shortcuts reading their key from a file written by **Connect**, and `GET /setup` with the Shortcut links from Railway variables (Challenge 38). 222 tests pass on SQLite and Postgres; 29 new browser checks plus the 228 earlier ones
+- **12 Nov 2026:** rebuilt both Shortcuts to read their key from a file, put their links on Railway, and Set up this phone worked end to end: Connect, share, and Refresh showing *"↓ ₹245 (was ₹252)"* lines. Railway is on Free now (the trial switched the service off until I chose it)
+- `feature/better-readers`, part 1: real store pages as permanent tests (`tests/pages/`, one row each), plain explanations for **out of stock** (Meesho) and **list pages** (VS India), and a store scoreboard (Challenge 39). Then a general reader for the product data shops hide in their pages (Next.js, `__INITIAL_STATE__`, `__PRELOADED_STATE__`, Myntra's `pdpData`), picking the product whose name matches the page title; microdata and Twitter price tags; home pages explained. 243 tests pass on SQLite and Postgres, including five real home pages that must not produce a price
