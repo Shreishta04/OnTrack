@@ -17,15 +17,18 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, HttpUrl
 
+import secrets
 import socket
 
 import auth
 import db
+import fcm
+import notify
 import replies
 import services
 from extractor import UnsafeURL, check_public_url
@@ -296,6 +299,23 @@ def get_extract():
     return services.default_extract
 
 
+def get_sender():
+    """How alerts reach phones (Firebase). Tests override this with a fake."""
+    return fcm.send
+
+
+def send_alerts(uid: int, send) -> None:
+    """After a price check: send any alert it queued (a price drop, back in
+    stock). Runs after the answer has gone back, so nobody waits for Firebase."""
+    conn = db.connect()
+    try:
+        notify.flush(conn, uid, send)
+    except Exception as exc:
+        logging.getLogger("uvicorn.error").warning("push     flush failed: %s", exc)
+    finally:
+        conn.close()
+
+
 def get_resolver():
     """How website names are looked up. Tests override this, so they never use the network."""
     return socket.getaddrinfo
@@ -359,6 +379,19 @@ async def duplicate(request: Request, exc: Duplicate):
 # ------------------------------------------------------------ request bodies
 # Pydantic validates these automatically: a missing field or a price of "abc"
 # gets a clear 422 error before our code ever runs.
+
+class NotifyIn(BaseModel):
+    """Settings → Notifications: send only the switches that changed."""
+    price_drop: bool | None = None
+    budget_reset: bool | None = None
+    waiting: bool | None = None
+    back_in_stock: bool | None = None
+
+
+class DeviceIn(BaseModel):
+    token: str = Field(..., min_length=20, max_length=4096)     # Firebase's id for this phone
+    platform: Literal["iphone", "android", "computer"] | None = None
+
 
 class BudgetIn(BaseModel):
     amount: float = Field(..., ge=0, examples=[15000])
@@ -670,16 +703,21 @@ def remove_link(link_id: int, conn=Depends(get_db), user=Depends(current_user)):
 
 
 @app.post("/refresh")
-async def post_refresh(force: bool = False, conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract)):
+async def post_refresh(later: BackgroundTasks, force: bool = False, conn=Depends(get_db), user=Depends(current_user),
+                       extract=Depends(get_extract), send=Depends(get_sender)):
     """Re-check prices of links not checked in the last hour (all of them with ?force=true)."""
-    return await services.refresh(conn, user["id"], extract, force=force)
+    result = await services.refresh(conn, user["id"], extract, force=force)
+    later.add_task(send_alerts, user["id"], send)
+    return result
 
 
 @app.post("/items/{item_id}/refresh")
-async def post_item_refresh(item_id: int, force: bool = True,
-                            conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract)):
+async def post_item_refresh(later: BackgroundTasks, item_id: int, force: bool = True,
+                            conn=Depends(get_db), user=Depends(current_user), extract=Depends(get_extract),
+                            send=Depends(get_sender)):
     """Re-check one item's links. Forced by default: you asked for this one specifically."""
     result = await services.refresh(conn, user["id"], extract, force=force, item_id=item_id)
+    later.add_task(send_alerts, user["id"], send)
     return {**result, "item": services.item_view(conn, user["id"], item_id)}
 
 @app.get("/refresh/phone-list")
@@ -689,16 +727,70 @@ def get_phone_refresh_list(force: bool = False, conn=Depends(get_db), user=Depen
 
 
 @app.post("/links/{link_id}/from-html")
-def post_link_from_html(request: Request, link_id: int, html: UploadFile = File(...),
-                        conn=Depends(get_db), user=Depends(current_user)):
+def post_link_from_html(request: Request, later: BackgroundTasks, link_id: int, html: UploadFile = File(...),
+                        conn=Depends(get_db), user=Depends(current_user), send=Depends(get_sender)):
     """Upload a freshly downloaded page for one link; records the new price.
     With ?reply=text: one line, like "Kurta: ↓ ₹899 (was ₹999)"."""
     page = html.file.read().decode("utf-8", errors="replace")
     if not page.strip():
         raise HTTPException(status_code=422, detail="The uploaded page is empty")
     result = services.refresh_link_from_html(conn, user["id"], link_id, page)
+    later.add_task(send_alerts, user["id"], send)
     if replies.wants_text(request.query_params):
         row = conn.execute("SELECT items.name FROM links JOIN items ON items.id = links.item_id "
                            "WHERE links.id = ?", (link_id,)).fetchone()
         return PlainTextResponse(replies.link_checked(row["name"] if row else None, result, user["currency"]))
     return result
+
+# ---------------------------------------------------------- notifications
+
+@app.get("/notifications")
+def get_notifications(conn=Depends(get_db), user=Depends(current_user)):
+    """Settings → Notifications: the four switches, how many phones get alerts,
+    and whether the server can send them yet (FIREBASE_SERVICE_ACCOUNT set)."""
+    return {"settings": notify.settings(conn, user["id"]),
+            "devices": notify.device_count(conn, user["id"]),
+            "configured": fcm.configured(),          # the server can send
+            "web": fcm.web_setup()}                  # the app can ask for a token (None: not set up)
+
+
+@app.put("/notifications")
+def put_notifications(body: NotifyIn, conn=Depends(get_db), user=Depends(current_user)):
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    return {"settings": notify.set_settings(conn, user["id"], changes)}
+
+
+@app.post("/push/devices", status_code=204)
+def post_device(body: DeviceIn, conn=Depends(get_db), user=Depends(current_user)):
+    """"Turn on alerts on this phone": the app sends the token Firebase gave it."""
+    notify.add_device(conn, user["id"], body.token, body.platform)
+
+
+@app.post("/push/devices/remove", status_code=204)
+def post_device_remove(body: DeviceIn, conn=Depends(get_db), user=Depends(current_user)):
+    notify.remove_device(conn, user["id"], body.token)
+
+
+@app.post("/push/test")
+def post_push_test(conn=Depends(get_db), user=Depends(current_user), send=Depends(get_sender)):
+    """"Send a test": straight away, even at night."""
+    if not fcm.configured() and send is fcm.send:
+        raise HTTPException(status_code=503, detail="Alerts aren't set up on the server yet (FIREBASE_SERVICE_ACCOUNT).")
+    return notify.send_test(conn, user["id"], send)
+
+
+CRON_SECRET_MIN = 24
+
+
+@app.post("/cron/tick")
+async def post_cron_tick(x_cron_secret: str | None = Header(None), conn=Depends(get_db),
+                         extract=Depends(get_extract), send=Depends(get_sender)):
+    """Called every hour by GitHub Actions (.github/workflows/alerts.yml): each
+    person's 9 am round, and sending alerts held overnight. Not a login: a
+    shared secret, ONTRACK_CRON_SECRET, in Railway and in GitHub's secrets."""
+    expected = os.getenv("ONTRACK_CRON_SECRET", "")
+    if len(expected) < CRON_SECRET_MIN:
+        raise HTTPException(status_code=503, detail="ONTRACK_CRON_SECRET isn't set on the server.")
+    if not x_cron_secret or not secrets.compare_digest(x_cron_secret, expected):
+        raise HTTPException(status_code=401, detail="Wrong cron secret.")
+    return await notify.tick(conn, extract, send)

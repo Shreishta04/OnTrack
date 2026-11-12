@@ -7,7 +7,7 @@
 // A header rather than a cookie, because Safari blocks cookies between the
 // web app's site (Vercel) and the server's (Railway).
 
-import type { PeriodRow, SetupLinks, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
+import type { AlertKind, NotifySettings, PeriodRow, SetupLinks, TestResult, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
 
 const SERVER_KEY = 'ontrack.server'
 const TOKEN_KEY = 'ontrack.token'
@@ -145,6 +145,14 @@ export const changePassword = (current: string, next: string) =>
 export const listTokens = () => request<TokenInfo[]>('/tokens')
 export const createToken = (name: string) => request<DeviceToken>('/tokens', post({ name }))
 export const getSetup = () => request<SetupLinks>('/setup')
+
+// Notifications: the four switches, and the phones that get alerts.
+export const getNotify = () => request<NotifySettings>('/notifications')
+export const setNotify = (changes: Partial<Record<AlertKind, boolean>>) =>
+  request<Pick<NotifySettings, 'settings'>>('/notifications', { method: 'PUT', body: JSON.stringify(changes) })
+export const addPushDevice = (token: string, platform: string) =>
+  request<void>('/push/devices', post({ token, platform }))
+export const sendTestAlert = () => request<TestResult>('/push/test', { method: 'POST' })
 export const revokeToken = (id: number) => request<void>(`/tokens/${id}`, { method: 'DELETE' })
 
 // Owner only

@@ -12,3 +12,5 @@ python-multipart==0.0.33
 psycopg[binary]==3.3.8
 psycopg-pool==3.3.3
 tzdata==2026.6
+google-auth==2.62.2
+requests==2.34.2

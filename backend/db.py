@@ -1,5 +1,5 @@
 """
-Database layer: nine tables, on SQLite (my laptop) or Postgres (deployed).
+Database layer: eleven tables, on SQLite (my laptop) or Postgres (deployed).
 
 Which one is decided by the DATABASE_URL setting:
   not set                      -> SQLite file (ONTRACK_DB, default ontrack.db)
@@ -51,7 +51,33 @@ CREATE TABLE IF NOT EXISTS users (
     currency      TEXT    NOT NULL DEFAULT 'INR',
     country       TEXT    NOT NULL DEFAULT 'IN',
     timezone      TEXT    NOT NULL DEFAULT 'Asia/Kolkata',
+    notify        TEXT    NOT NULL DEFAULT 'price_drop,budget_reset,waiting,back_in_stock',  -- alerts switched on
+    daily_on      TEXT,                        -- local date of the last 9 am round (price check, reminders)
     created_at    TEXT    NOT NULL
+);
+
+-- Phones (and browsers) that receive alerts: Firebase gives each one a token.
+CREATE TABLE IF NOT EXISTS push_devices (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token      TEXT    NOT NULL UNIQUE,
+    platform   TEXT,                          -- iphone / android / computer
+    created_at TEXT    NOT NULL
+);
+
+-- Alerts waiting to be sent, and those sent (kept so nothing goes out twice).
+-- An alert found at night waits until 8 am on the person's own clock.
+CREATE TABLE IF NOT EXISTS alerts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind       TEXT    NOT NULL,              -- price_drop / budget_reset / waiting / back_in_stock / test
+    item_id    INTEGER,                       -- the item it's about, if any (tapping opens the app)
+    title      TEXT    NOT NULL,
+    body       TEXT    NOT NULL,
+    dedupe     TEXT    NOT NULL,              -- the same dedupe key is only ever queued once
+    created_at TEXT    NOT NULL,
+    sent_at    TEXT,                          -- NULL: still waiting
+    UNIQUE (user_id, dedupe)
 );
 
 CREATE TABLE IF NOT EXISTS periods (
@@ -145,6 +171,8 @@ CREATE INDEX IF NOT EXISTS idx_history_link ON price_history(link_id, checked_at
 CREATE INDEX IF NOT EXISTS idx_items_user   ON items(user_id);
 CREATE INDEX IF NOT EXISTS idx_tokens_user  ON tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_periods_user ON periods(user_id, starts_on);
+CREATE INDEX IF NOT EXISTS idx_push_user    ON push_devices(user_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_wait  ON alerts(user_id, sent_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_links_user_url ON links(user_id, url);
 """
 
@@ -294,6 +322,11 @@ def migrate(conn) -> None:
     pg = isinstance(conn, PgConnection)
     if "reset_day" not in columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN reset_day INTEGER")
+    if "notify" not in columns(conn, "users"):      # (notifications) every alert on to begin with
+        conn.execute("ALTER TABLE users ADD COLUMN notify TEXT NOT NULL "
+                     "DEFAULT 'price_drop,budget_reset,waiting,back_in_stock'")
+    if "daily_on" not in columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN daily_on TEXT")
     if columns(conn, "links") and "read_via" not in columns(conn, "links"):
         conn.execute("ALTER TABLE links ADD COLUMN read_via TEXT")
     if "user_id" not in columns(conn, "items"):

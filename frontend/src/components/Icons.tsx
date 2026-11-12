@@ -220,3 +220,34 @@ export function AddBoxIcon() {
     </svg>
   )
 }
+
+// A bell: Settings → Notifications.
+export function BellIcon() {
+  return (
+    <svg {...common}>
+      <path d="M6 16.5V11a6 6 0 1 1 12 0v5.5l1.5 2h-15z" />
+      <path d="M10 20.5a2.2 2.2 0 0 0 4 0" />
+    </svg>
+  )
+}
+
+// A price tag with a small arrow down: "Price dropped".
+export function TagDownIcon() {
+  return (
+    <svg {...common}>
+      <path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3-8.7 8.7z" />
+      <circle cx="8" cy="8" r="1.3" />
+      <path d="M17.5 15.5v5M15.5 18.5l2 2 2-2" />
+    </svg>
+  )
+}
+
+// An open box: "Back in stock".
+export function BoxIcon() {
+  return (
+    <svg {...common}>
+      <path d="M4 8l8-4 8 4v8.5l-8 4-8-4z" />
+      <path d="M4 8l8 4 8-4M12 12v8.5" />
+    </svg>
+  )
+}

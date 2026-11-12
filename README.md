@@ -4,7 +4,7 @@
 
 [![Tests](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml/badge.svg)](https://github.com/Shreishta04/OnTrack/actions/workflows/tests.yml)
 
-**Status:** 🟢 Live at **https://on-track-eta.vercel.app** (invite-only). Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ · Web app ✅ (laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres ✅ · Deployed ✅ (Vercel + Railway + Neon) · Accounts ✅ (own list, budget, currency and time zone per person)
+**Status:** 🟢 Live at **https://on-track-eta.vercel.app** (invite-only). Price extractor ✅ · Backend API ✅ · iPhone Shortcuts ✅ · Web app ✅ (laptop + phone) · Browser extension ✅ (Chrome / Edge) · Postgres ✅ · Deployed ✅ (Vercel + Railway + Neon) · Accounts ✅ (own list, budget, currency and time zone per person) · Notifications ✅ (Firebase)
 
 ---
 
@@ -105,6 +105,13 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Never hangs:** adding a link gives up after **25 seconds in total**, and the database is never locked while a store page downloads, so the rest of the app keeps working
 - **Price history** per item: every check, oldest first, ready for a chart ("↓ ₹40 since you saved it", lowest price seen)
 - **Graceful failures:** if a store blocks a check, the last known price is kept and the reason is shown
+- **Checked every morning:** at 9 am on each person's own clock, the server re-checks their prices by itself (every store except Amazon, which stays with the phone's Refresh)
+
+**Notifications**
+- **Four alerts**, each with its own switch in **Settings → Notifications**: *Price dropped* ("Kurta: ↓ ₹899 (was ₹1,099)"), *Back in stock*, *Budget resets tomorrow* (on the last day of a period) and *Still on your list* (Mondays: things waiting two weeks or more)
+- **Turn on alerts on this phone** with one tap; the phone asks permission, and that phone starts getting alerts. On an iPhone it works in the app opened from the Home Screen (Apple's rule); in Safari, Settings says so
+- **Never at night:** anything found between 10 pm and 8 am (the person's own time) waits and arrives in the morning. Five at once arrive as one ("5 updates from OnTrack")
+- **Send a test** to check it works; news older than a day is dropped rather than sent late
 
 ## Architecture
 
@@ -787,6 +794,27 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 
 **What's left:** the first visit after a quiet spell still wakes the server (Railway Free sleeps when idle) and Neon. With the saved list showing meanwhile, that's a wait you no longer stare at.
 
+### 41. Notifications: telling the phone without an app store
+
+**Symptom (a wish, really):** OnTrack knew when a price dropped, but only if I opened it. I wanted the phone to tell me, plus a reminder before the budget resets and a nudge about things that have waited for weeks.
+
+**What had to be true:**
+- *It works on the iPhone without an App Store app.* Since iOS 16.4, a web app **added to the Home Screen** can get real notifications (Web Push). Not in a Safari tab, and only after a tap: a website can't ask on its own. So the button lives in Settings, and Safari users are told to open the Home Screen app.
+- *Something sends them.* Phones only take pushes from Apple's and Google's push services. **Firebase Cloud Messaging** (free) is the post office: the app gets a **token** (this phone's address) from Firebase and gives it to my server; my server asks Firebase to deliver. Railway and Neon stay; Firebase does only this (decided on 12 Nov).
+- *Something wakes up every day.* Railway's Free plan sleeps and has no scheduler. A **GitHub Actions** job calls `/cron/tick` every hour, with a shared secret. Hourly rather than once at 9 am IST because people live in different time zones: the server runs each person's round at the first tick after 9 am **on their clock**, once a day. GitHub sometimes starts scheduled jobs late, which this copes with too.
+
+**Problems found and how they were solved:**
+- *The same price drop would be sent again on every check.* Each alert has a **dedupe key** (the link, the new price and the day), and the database refuses a second copy (`UNIQUE (user_id, dedupe)`).
+- *A drop found at 11:30 pm.* Alerts are **queued**, not sent on the spot. Sending (`flush`) skips quiet hours (10 pm–8 am, the person's own time); the first hourly tick after 8 am sends what waited.
+- *Turning alerts on later would bring a pile of old news.* Nothing is queued for someone with no phone set up, and anything older than a day is dropped instead of sent.
+- *Out of stock isn't "no price".* When a store is sold out, OnTrack keeps the last price and notes why. *Back in stock* is a successful check whose previous error was the out-of-stock one; *Price dropped* is a lower price than the one stored. Bought items never alert.
+- *A deleted app leaves a dead token.* Firebase answers `UNREGISTERED`; the server forgets that phone.
+- *iPhones stop pushes that show nothing.* Every message is "data only" and the app's service worker always turns it into a visible notification, so it looks the same everywhere.
+- *Nobody waits for Firebase.* After a refresh, alerts are sent in the background, after the answer has gone back.
+- *A test found by the new code:* the "connections are reused" test assumed the pool held one connection. Sending alerts in the background borrows a second one, so the test now starts from a fresh pool.
+
+**What's secret and what isn't:** the Firebase **service account** file can send alerts as my project, so it lives only in a Railway variable (`FIREBASE_SERVICE_ACCOUNT`), never in git or a chat. The **web config** and the **VAPID key** are public by design (every Firebase web app ships them), but they're Railway variables too, so a new Firebase project needs no code change.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -801,6 +829,9 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - **Amazon links pasted into the web app** are fetched by the server and may be blocked (it's hit-and-miss). Use the browser extension on the laptop, or share the same link from the phone, and the item is filled in.
 - **Periods are monthly only.** Weekly or yearly periods are parked.
 - **Target and Victoria's Secret US** don't give a price yet (their prices aren't in the standard product data). On an iPhone, a copied link that can't be shared goes through the server; for stores that block it, copy the link and run *Add to OnTrack* from its Home Screen icon (it reads the clipboard).
+- **Alerts on an iPhone need the Home Screen app** (iOS 16.4+), not Safari. Each phone (and each browser) is turned on separately; the four switches are per person.
+- **Amazon prices aren't checked in the morning** (the server can't read Amazon), so Amazon price drops only alert after the phone's *Refresh OnTrack*.
+- **The morning round depends on GitHub's schedule,** which can run late (rarely, skip an hour). The round then runs at the next tick.
 - **Deleting has no undo yet**; that's what the "are you sure?" is for until the recycle bin.
 - **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
 - **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
@@ -865,6 +896,10 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 **Railway settings** (service → Settings and Variables)
 - Root Directory `/backend`, Config File `/backend/railway.json` (start command and `/health` check live in that file, in git)
 - Variables: `ONTRACK_API_KEY` (a production key, different from my laptop's), `DATABASE_URL` (Neon's connection string), `ONTRACK_TRUST_PROXY=on`, `ONTRACK_DOCS=off`, `ONTRACK_CORS_ORIGINS=https://on-track-eta.vercel.app` (no trailing slash, Challenge 29)
+- Alerts (Challenge 41): `FIREBASE_SERVICE_ACCOUNT` (the whole private key file, **secret**), `FIREBASE_WEB_CONFIG` (the `firebaseConfig` block, pasted as Firebase shows it), `FIREBASE_VAPID_KEY` (Cloud Messaging → Web Push certificates), `ONTRACK_CRON_SECRET` (24+ random characters)
+
+**GitHub settings** (repository → Settings → Secrets and variables → Actions)
+- Secrets `ONTRACK_SERVER` (the Railway address, no slash at the end) and `ONTRACK_CRON_SECRET` (the same value as on Railway). The `alerts` workflow uses them every hour; *Actions → alerts → Run workflow* runs it by hand
 
 **Vercel settings**
 - Root Directory `frontend`; Vite is detected by itself
@@ -1094,6 +1129,10 @@ All endpoints except `/health` and `/auth/signup|login|reset` need a login token
 | `POST` | `/items/{id}/refresh` | Re-check one item |
 | `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, and either not checked in the last hour or still without a price |
 | `POST` | `/links/{id}/from-html` | Upload a fresh page for one link (phone refresh, or the extension's **Update price**); records the new price |
+| `GET` · `PUT` | `/notifications` | The four alert switches, how many phones get alerts, whether the server can send, and the public Firebase setup; change any switch |
+| `POST` | `/push/devices` · `/push/devices/remove` | Remember (or forget) this phone's Firebase token |
+| `POST` | `/push/test` | Send a test alert now, quiet hours or not |
+| `POST` | `/cron/tick` | The hourly job (header `X-Cron-Secret`, not a login): each person's 9 am round, then alerts that waited |
 
 ## Project structure
 
@@ -1106,6 +1145,8 @@ OnTrack/
 │   ├── auth.py            accounts: invites, passwords, tokens, resets
 │   ├── services.py        business logic
 │   ├── replies.py         the sentences the Shortcuts show (?reply=text) instead of JSON
+│   ├── notify.py          alerts: what to say, quiet hours, the daily 9 am round
+│   ├── fcm.py             sending one alert to one phone through Firebase
 │   ├── db.py              schema and upgrades of old databases; SQLite or Postgres (DATABASE_URL)
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
@@ -1182,7 +1223,8 @@ OnTrack/
 - [x] iOS Shortcut: "Refresh OnTrack" refreshes Amazon prices through the phone
 - [ ] One-tap refresh: the Shortcut also triggers the server's `/refresh` for other stores
 - [x] Set up this phone: Home Screen guide, Shortcuts by link, Connect without typing a key (iPhone), Install button (Android)
-- [ ] Daily automatic refresh with an iOS Automation (after deployment, so it works on any network)
+- [x] Daily automatic refresh: the server checks prices at 9 am on each person's clock (GitHub Actions wakes it hourly); Amazon still through the phone
+- [x] Notifications (Firebase Cloud Messaging): price dropped, back in stock, budget resets tomorrow, still on your list; a switch for each, quiet hours, a test button
 - [x] Shortcut: replace the raw JSON reply with a short notification (`?reply=text`)
 - [x] React + TypeScript web app: budget card, tabs, expandable rows with photos, row actions, paste-a-link, manual price fallback, settings, light/dark, laptop and phone layouts
 - [x] Backend fixes from phone testing: no database lock during downloads, 25 s limit per add, request-start logging, stuck links rescued (share again or Refresh), Flipkart duplicates
@@ -1324,3 +1366,8 @@ OnTrack/
 - `feature/better-readers`, part 1: real store pages as permanent tests (`tests/pages/`, one row each), plain explanations for **out of stock** (Meesho) and **list pages** (VS India), and a store scoreboard (Challenge 39). Then a general reader for the product data shops hide in their pages (Next.js, `__INITIAL_STATE__`, `__PRELOADED_STATE__`, Myntra's `pdpData`), picking the product whose name matches the page title; microdata and Twitter price tags; home pages explained. 243 tests pass on SQLite and Postgres, including five real home pages that must not produce a price
 - Merged as PR #22. Then the phone app felt slow (6–10 s to open, ~3 s per move): `feature/speed` reads the list in 3 queries instead of one per item and link (74 → 13), reuses database connections (a pool), opens from the copy saved on the phone with the saved list showing at once, and shows moves before the server answers (Challenge 40). 246 tests pass; 10 new browser checks with a deliberately slow server, plus the 257 earlier ones
 - Decided: **Railway + Neon stay; Firebase only for notifications (Cloud Messaging)**. Firestore would mean rewriting every query for no gain (OnTrack's data is tables that refer to each other, and budgets need sums), but FCM is free, reaches the iPhone home-screen app and Android, and will serve a Flutter app later
+
+**12 Nov 2026 (later)**
+- `feature/notifications` (Challenge 41): **Settings → Notifications** with *Turn on* for this phone, four switches (price dropped, back in stock, budget resets tomorrow, still on your list) and *Send a test*. The server queues alerts with a dedupe key, holds them 10 pm–8 am on each person's clock, and sends through Firebase Cloud Messaging; the service worker shows them and a tap opens OnTrack
+- A daily round at 9 am per person (price check, then reminders), woken hourly by a GitHub Actions job calling `/cron/tick` with a shared secret, since Railway Free sleeps
+- 18 new tests with a fake Firebase and a fake clock (279 runs pass on SQLite and Postgres; the new ones fail on the old code), plus 14 browser checks for the Settings section (light, dark, iPhone Safari, a failed save, an older server) and the 267 earlier ones
