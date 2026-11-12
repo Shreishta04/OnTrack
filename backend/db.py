@@ -35,6 +35,7 @@ twice" while two different people still can.
 
 from __future__ import annotations
 
+import atexit
 import os
 import sqlite3
 
@@ -176,15 +177,45 @@ def _to_pg(sql: str) -> str:
     return sql.replace("%", "%%").replace("?", "%s")
 
 
+# A few open connections kept ready (a "pool"), instead of a new one for
+# every request. Opening a connection to Neon is a secure handshake of several
+# round trips before the first query; borrowing an open one skips all that.
+#   max_size 5     enough for one small server; Neon's free plan allows far more
+#   max_idle 240s  close connections unused for 4 minutes, before Neon itself
+#                  goes to sleep (5 minutes) and would cut them off
+#   check          a quick "still there?" when one is borrowed, so a connection
+#                  cut off while idle is replaced instead of failing a request
+_POOLS: dict = {}
+
+
+def close_pools() -> None:
+    """Close every pool (the server stopping, or the tests finishing)."""
+    for pool in _POOLS.values():
+        pool.close()
+    _POOLS.clear()
+
+
+atexit.register(close_pools)
+
+
+def _pool(url: str):
+    if url not in _POOLS:
+        from psycopg.rows import dict_row
+        from psycopg_pool import ConnectionPool
+        _POOLS[url] = ConnectionPool(url, min_size=0, max_size=5, max_idle=240, open=True,
+                                     kwargs={"row_factory": dict_row}, check=ConnectionPool.check_connection)
+    return _POOLS[url]
+
+
 class PgConnection:
     """A Postgres connection that looks like our SQLite one, so services.py
     doesn't need to know which database it's talking to: same execute(),
-    same ? placeholders, rows readable as row["price"], commit(), close()."""
+    same ? placeholders, rows readable as row["price"], commit(), close().
+    It's borrowed from the pool, and close() hands it back."""
 
     def __init__(self, url: str):
-        import psycopg                       # only needed when Postgres is used
-        from psycopg.rows import dict_row
-        self.raw = psycopg.connect(url, row_factory=dict_row)
+        self._pool = _pool(url)
+        self.raw = self._pool.getconn()
 
     def execute(self, sql: str, params=()):
         # Always pass a tuple (even an empty one) so psycopg always reads
@@ -201,7 +232,17 @@ class PgConnection:
         self.raw.rollback()
 
     def close(self) -> None:
-        self.raw.close()
+        """Hand the connection back. Anything not committed is rolled back first,
+        so the next request never inherits half a change."""
+        if self.raw is None:
+            return
+        try:
+            if self.raw.info.transaction_status != 0:   # 0 = idle, nothing open
+                self.raw.rollback()
+        except Exception:
+            pass                                       # a broken one: the pool replaces it
+        self._pool.putconn(self.raw)
+        self.raw = None
 
 
 def connect(path: str | None = None):

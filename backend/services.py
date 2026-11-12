@@ -583,11 +583,8 @@ def _require_item(conn, uid: int, item_id: int) -> None:
 
 
 # ------------------------------------------------------------------- reads
-def _link_view(conn, row: sqlite3.Row) -> dict:
-    hist = conn.execute(
-        "SELECT price FROM price_history WHERE link_id = ? ORDER BY checked_at, id", (row["id"],)
-    ).fetchall()
-    prices = [h["price"] for h in hist]
+def _link_view(row, prices: list) -> dict:
+    """One link, given its price history (oldest first)."""
     return {
         "id": row["id"],
         "url": row["url"],
@@ -603,13 +600,7 @@ def _link_view(conn, row: sqlite3.Row) -> dict:
     }
 
 
-def item_view(conn, uid: int, item_id: int) -> dict:
-    row = conn.execute("SELECT * FROM items WHERE id = ? AND user_id = ?", (item_id, uid)).fetchone()
-    if not row:
-        raise NotFound(f"item {item_id}")
-    links = [_link_view(conn, l) for l in conn.execute(
-        "SELECT * FROM links WHERE item_id = ? ORDER BY id", (item_id,))]
-
+def _item_view(row, links: list[dict]) -> dict:
     priced = [l for l in links if l["price"] is not None]
     best = min(priced, key=lambda l: l["price"]) if priced else None
     price = best["price"] if best else row["manual_price"]
@@ -632,14 +623,43 @@ def item_view(conn, uid: int, item_id: int) -> dict:
     }
 
 
+def _views(conn, rows) -> list[dict]:
+    """Many items at once, in three queries whatever the list's size: the
+    items (already read), all their links, and all those links' price history.
+    (It used to be one query per item, per link and per history: 74 for a
+    33-item list, each a round trip to the database.)"""
+    rows = list(rows)
+    if not rows:
+        return []
+    marks = ",".join("?" * len(rows))
+    links = conn.execute(f"SELECT * FROM links WHERE item_id IN ({marks}) ORDER BY id",
+                         [r["id"] for r in rows]).fetchall()
+    history: dict[int, list] = {}
+    if links:
+        marks = ",".join("?" * len(links))
+        for h in conn.execute(f"SELECT link_id, price FROM price_history WHERE link_id IN ({marks}) "
+                              "ORDER BY checked_at, id", [l["id"] for l in links]):
+            history.setdefault(h["link_id"], []).append(h["price"])
+    by_item: dict[int, list] = {}
+    for l in links:
+        by_item.setdefault(l["item_id"], []).append(_link_view(l, history.get(l["id"], [])))
+    return [_item_view(r, by_item.get(r["id"], [])) for r in rows]
+
+
+def item_view(conn, uid: int, item_id: int) -> dict:
+    row = conn.execute("SELECT * FROM items WHERE id = ? AND user_id = ?", (item_id, uid)).fetchone()
+    if not row:
+        raise NotFound(f"item {item_id}")
+    return _views(conn, [row])[0]
+
+
 def list_items(conn, uid: int, status: str | None = None) -> list[dict]:
     if status:
-        rows = conn.execute("SELECT id FROM items WHERE user_id = ? AND status = ? "
+        rows = conn.execute("SELECT * FROM items WHERE user_id = ? AND status = ? "
                             "ORDER BY priority DESC, id", (uid, status))
     else:
-        rows = conn.execute("SELECT id FROM items WHERE user_id = ? ORDER BY priority DESC, id", (uid,))
-    ids = [r["id"] for r in rows]
-    return [item_view(conn, uid, i) for i in ids]
+        rows = conn.execute("SELECT * FROM items WHERE user_id = ? ORDER BY priority DESC, id", (uid,))
+    return _views(conn, rows.fetchall())
 
 
 def price_history(conn, uid: int, item_id: int) -> list[dict]:

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices, save, saved } from './api'
 import type { Item, Me, Status, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
@@ -8,7 +8,7 @@ import ListTools from './components/ListTools'
 import { saveSort, savedSort, sortItems, type SortId } from './sort'
 import { useSwipe } from './hooks/useSwipe'
 import ItemList from './components/ItemList'
-import type { RowAction } from './components/ItemRow'
+import type { ItemEdit, RowAction } from './components/ItemRow'
 import SettingsPage from './components/SettingsPage'
 import AnalyticsPage from './components/AnalyticsPage'
 import BudgetSetup from './components/BudgetSetup'
@@ -87,7 +87,9 @@ function savedWhen(iso: string): string {
 export default function App() {
   const [signedIn, setSignedIn] = useState(() => !!getToken())
   const [link, setLink] = useState(linkFromUrl)
-  const [me, setMe] = useState<Me | null>(null)
+  // Start with the profile saved on this device (if any), so the app can draw
+  // straight away; the fresh one replaces it when the server answers.
+  const [me, setMe] = useState<Me | null>(() => (getToken() ? (saved<Me>('me')?.value ?? null) : null))
 
   // Any request that finds this login has ended (api.ts) brings us back here,
   // and the list is cleared from the screen.
@@ -139,7 +141,11 @@ export default function App() {
 }
 
 function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
-  const [summary, setSummary] = useState<Summary | null>(null)
+  // Open instantly: show the list saved on this device while the server wakes
+  // up (on the Free plan that can take several seconds), then swap in the
+  // fresh one. `updating` is true until the first answer arrives.
+  const [summary, setSummary] = useState<Summary | null>(() => saved<Summary>('summary')?.value ?? null)
+  const [updating, setUpdating] = useState(() => saved<Summary>('summary') != null)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<TabId>('planned')
   const [refreshing, setRefreshing] = useState(false)
@@ -168,14 +174,23 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // Fetch the latest numbers and items (on opening, after a button press,
   // on coming back). Each good answer is saved; with no connection, the
   // saved copy is shown instead, read-only.
+  // Counts changes shown on screen before the server answered (showNow). A
+  // reload that started before the latest one is out of date when it comes
+  // back: two quick moves would otherwise flicker the first item back.
+  const changes = useRef(0)
+
   async function load() {
+    const startedAt = changes.current
     try {
       const fresh = await getSummary()
+      if (startedAt !== changes.current) return // a newer change is on screen; its own reload follows
       setSummary(fresh)
       save('summary', fresh)
       setError(null)
       setOfflineSince(null)
+      setUpdating(false)
     } catch (e) {
+      setUpdating(false)
       const copy = saved<Summary>('summary')
       if (e instanceof Offline && copy) {
         setSummary(copy.value)
@@ -262,21 +277,50 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     }
   }
 
-  // A row button was pressed: tell the server, then reload so the budget
-  // card, counts and lists all reflect the change.
+  // Show a change on screen straight away, before the server has answered:
+  // the item moves (or goes) at once, and the reload that follows brings the
+  // budget card and everything else exactly in line. If the server says no,
+  // that reload puts things back the way they really are.
+  function showNow(ids: number[], change: 'delete' | { status: Status } | { edit: ItemEdit }) {
+    changes.current += 1
+    setSummary((current) => {
+      if (!current) return current
+      const hit = new Set(ids)
+      const items = change === 'delete'
+        ? current.items.filter((i) => !hit.has(i.id))
+        : current.items.map((i) => {
+            if (!hit.has(i.id)) return i
+            if ('status' in change) return { ...i, status: change.status }
+            const e = change.edit
+            const own = e.manual_price !== undefined && i.best_link_id == null // no store price: the typed one counts
+            return {
+              ...i,
+              ...(e.name !== undefined && { name: e.name }),
+              ...(e.note !== undefined && { note: e.note }),
+              ...(e.purchased_price !== undefined && { purchased_price: e.purchased_price }),
+              ...(own && { manual_price: e.manual_price ?? null, price: e.manual_price ?? null, needs_price: e.manual_price == null }),
+            }
+          })
+      return { ...current, items }
+    })
+  }
+
+  // A row button was pressed: show it at once, tell the server, then reload
+  // so the budget card, counts and lists all reflect the change.
   async function handleAction(item: Item, action: RowAction) {
     if (offlineSince) {
       setNote({ text: 'You’re offline. Changes need a connection.', tone: 'warn' })
       return
     }
+    showNow([item.id], action === 'delete' ? 'delete' : typeof action === 'object' ? action : { status: action })
     try {
       if (action === 'delete') await deleteItem(item.id)
       else if (typeof action === 'object') await patchItem(item.id, action.edit) // Edit, or a typed price
       else await patchItem(item.id, { status: action })
-      await load()
     } catch (e) {
-      setError((e as Error).message)
+      setNote({ text: `Couldn’t save that: ${(e as Error).message}`, tone: 'warn' })
     }
+    await load() // the real numbers (and the real list, if the server refused)
   }
 
   const items = summary?.items ?? []
@@ -360,6 +404,8 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     }
     if (action === 'delete') {
       const n = pickedItems.length
+      showNow(pickedItems.map((i) => i.id), 'delete')
+      setPicked(new Set())
       try {
         await Promise.all(pickedItems.map((i) => deleteItem(i.id)))
         setNote({ text: `Deleted ${n} ${n === 1 ? 'item' : 'items'}.`, tone: 'muted' })
@@ -374,6 +420,8 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     const status: Status = parkRest ? 'later' : action.move
     const targets = (parkRest ? visible.filter((i) => !picked.has(i.id)) : pickedItems)
       .filter((i) => i.status !== status)
+    showNow(targets.map((i) => i.id), { status })
+    setPicked(new Set())
     try {
       await Promise.all(targets.map((i) => patchItem(i.id, { status })))
       const n = targets.length
@@ -397,6 +445,11 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // Shown on both pages.
   const notes = (
     <>
+      {updating && !offlineSince && (
+        <p className="header-note updating-note" role="status">
+          <i className="dot dot-update" /> Updating…
+        </p>
+      )}
       {offlineSince && (
         <button className="offline-note" role="status" onClick={retryNow} disabled={retrying}>
           <i className="dot dot-offline" />

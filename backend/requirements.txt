@@ -10,4 +10,5 @@ uvicorn[standard]==0.54.0
 python-dotenv==1.2.4
 python-multipart==0.0.33
 psycopg[binary]==3.3.8
+psycopg-pool==3.3.3
 tzdata==2026.6

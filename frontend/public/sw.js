@@ -8,15 +8,19 @@
 // stored here.
 //
 // Rules:
-//   the page itself   network first, the saved copy when offline. Every
+//   the page itself   the saved copy first, so the app opens at once, even
+//                     on a slow phone connection; a fresh copy is fetched in
+//                     the background for next time. (A new version is still
+//                     noticed straight away: useNewVersion asks Vercel itself
+//                     and shows "A new version is ready · Update".) Every
 //                     address (/, /settings) is the same single page, so the
-//                     one saved copy opens any of them; the app then reads
-//                     the address and shows the right screen.
+//                     one saved copy opens any of them.
 //   /assets/…         saved copy first (Vite gives every build new file
 //                     names, so a saved file never goes out of date)
 //   anything else     straight to the network
 
 const CACHE = 'ontrack-app-v1'
+// (same name as before on purpose: the copy already saved on phones keeps working)
 
 // Find the /assets/… files a page uses, so they can be saved with it.
 const assetsIn = (html) => [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1])
@@ -60,14 +64,20 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || url.origin !== self.location.origin) return // the server, fonts: not ours
 
   if (request.mode === 'navigate') {
+    // Fetch a fresh copy in the background either way, and save it.
+    const fresh = fetch(request).then((response) => {
+      if (response.ok) event.waitUntil(savePage(response.clone()))
+      return response
+    })
+    event.waitUntil(fresh.catch(() => {})) // offline: nothing to save, and that's fine
     event.respondWith(
       (async () => {
+        const saved = await caches.match('/')
+        if (saved) return saved // open at once with the saved copy
         try {
-          const response = await fetch(request)
-          if (response.ok) event.waitUntil(savePage(response.clone()))
-          return response
+          return await fresh // the very first visit: nothing saved yet
         } catch {
-          return (await caches.match('/')) || Response.error() // offline: the saved page
+          return Response.error()
         }
       })(),
     )
