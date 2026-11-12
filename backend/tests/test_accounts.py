@@ -358,3 +358,69 @@ def test_an_old_database_is_upgraded_without_losing_anything(backend, tmp_path, 
         services.delete_item(conn, a, 4)
         assert conn.execute("SELECT COUNT(*) AS n FROM price_history").fetchone()["n"] == 0
     conn.close()
+
+
+# ---------------------------------------------------------- remove access
+
+def priya_id(app, shane):
+    return next(p["id"] for p in app.get("/users", headers=h(shane)).json() if p["email"] == PRIYA["email"])
+
+
+def test_removing_someone_signs_them_out_everywhere(app):
+    shane, priya = owner_and_friend(app)
+    phone_key = app.post("/tokens", json={"name": "iPhone Shortcuts"}, headers=h(priya)).json()["token"]
+    app.post("/items", json={"name": "Kurta", "price": 899}, headers=h(priya))
+    pid = priya_id(app, shane)
+
+    assert app.post(f"/users/{pid}/remove", headers=h(shane)).status_code == 204
+    for token in (priya, phone_key):                       # her login AND her Shortcut's key
+        r = app.get("/summary", headers=h(token))
+        assert r.status_code == 401
+    login = app.post("/auth/login", json={"email": PRIYA["email"], "password": PRIYA["password"]})
+    assert login.status_code == 401 and login.json()["detail"] == auth.SWITCHED_OFF
+    wrong = app.post("/auth/login", json={"email": PRIYA["email"], "password": "not her password at all"})
+    assert wrong.json()["detail"] == "Email or password is wrong."   # without her password: nothing revealed
+    people = {p["email"]: p for p in app.get("/users", headers=h(shane)).json()}
+    assert people[PRIYA["email"]]["removed_at"] and people[PRIYA["email"]]["items"] == 1   # list kept
+
+
+def test_giving_access_back_restores_her_list(app):
+    shane, priya = owner_and_friend(app)
+    app.post("/items", json={"name": "Kurta", "price": 899}, headers=h(priya))
+    pid = priya_id(app, shane)
+    app.post(f"/users/{pid}/remove", headers=h(shane))
+    assert app.post(f"/users/{pid}/restore", headers=h(shane)).status_code == 204
+    login = app.post("/auth/login", json={"email": PRIYA["email"], "password": PRIYA["password"]})
+    assert login.status_code == 200
+    items = app.get("/items", headers=h(login.json()["token"])).json()
+    assert [i["name"] for i in items] == ["Kurta"]
+
+
+def test_only_the_owner_removes_and_never_themselves(app):
+    shane, priya = owner_and_friend(app)
+    owner_id = next(p["id"] for p in app.get("/users", headers=h(shane)).json() if p["is_admin"])
+    assert app.post(f"/users/{owner_id}/remove", headers=h(shane)).status_code == 400
+    assert app.post(f"/users/{owner_id}/remove", headers=h(priya)).status_code == 403
+    assert app.post("/users/999/remove", headers=h(shane)).status_code == 404
+    assert app.get("/me", headers=h(shane)).status_code == 200
+
+
+def test_a_removed_person_cant_use_an_old_reset_link(app):
+    shane, priya = owner_and_friend(app)
+    pid = priya_id(app, shane)
+    code = app.post(f"/users/{pid}/reset", headers=h(shane)).json()["code"]
+    app.post(f"/users/{pid}/remove", headers=h(shane))
+    r = app.post("/auth/reset", json={"code": code, "password": "a brand new password"})
+    assert r.status_code == 400                                       # the link was cancelled
+    assert app.post(f"/users/{pid}/reset", headers=h(shane)).status_code == 400   # and no new one
+
+
+def test_removed_people_get_no_alerts_or_morning_round(app, monkeypatch):
+    import notify
+    shane, priya = owner_and_friend(app)
+    app.post("/push/devices", json={"token": "priya-phone-" + "x" * 30, "platform": "iphone"}, headers=h(priya))
+    pid = priya_id(app, shane)
+    app.post(f"/users/{pid}/remove", headers=h(shane))
+    conn = db.connect()
+    assert notify.device_count(conn, pid) == 0
+    conn.close()

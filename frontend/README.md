@@ -100,7 +100,7 @@ src/
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, a price box when it needs one, Edit (name, note, price), actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
-    ├── SettingsPage.tsx   /settings: profile, appearance, notifications (Turn on, four switches, Send a test), budget and reset day, region, password, device keys, people (owner), log out
+    ├── SettingsPage.tsx   /settings: profile, appearance, notifications (Turn on, four switches, Send a test), budget and reset day, region, password, device keys, people (owner: invites, reset links, Remove / Give access back), log out
     └── Icons.tsx          small line icons (search, gear, back, refresh, sun, moon, close, chevron, …)
 ```
 

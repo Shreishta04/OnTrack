@@ -39,6 +39,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **The same product on two lists:** duplicate checks are per person, so two people can save the same lipstick, but one person still can't save it twice
 - **A key per device:** each Shortcut and the browser extension gets its own key from **Settings → Shortcuts and extension**, shown once and removable if a phone is lost, without touching anything else
 - **Email + password**, hashed with scrypt; a wrong email and a wrong password get the same answer; logins are rate-limited
+- **Remove access:** in **Settings → People and invites**, *Remove* (two taps) switches someone's account off. Every login and device key stops working at once, they can't log in again, and they get no alerts or morning checks. Their list is kept, so *Give access back* undoes it (they log in with their password and make new Shortcut keys). The owner can't be removed
 - **Forgot the password?** I make a one-time reset link (valid 2 days) in **Settings → People and invites**. Using it signs out old logins but keeps device keys, so the Shortcuts don't break. Changing a password signs out every other login
 
 **Saving items**
@@ -815,6 +816,20 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 
 **What's secret and what isn't:** the Firebase **service account** file can send alerts as my project, so it lives only in a Railway variable (`FIREBASE_SERVICE_ACCOUNT`), never in git or a chat. The **web config** and the **VAPID key** are public by design (every Firebase web app ships them), but they're Railway variables too, so a new Firebase project needs no code change.
 
+### 42. Taking someone's access away
+
+**The wish:** as the owner, I should be able to stop someone using OnTrack: a test account, or a person I invited by mistake.
+
+**Decision:** two kinds of removal were possible, *switch the account off* (undoable) and *delete it with its list* (permanent). I chose only the first: a mistake costs nothing, and deleting can come later if it's ever needed.
+
+**How it works:**
+- `users.removed_at` marks a switched-off account (added to the live database on start).
+- Removing deletes all their tokens, so the web app, the Shortcuts and the extension are refused **at once**, not when a login expires. As a second lock, a token can't belong to a removed account even if one were left.
+- Their open reset links are cancelled, their phones are taken off the alert list, and the 9 am round skips them.
+- Logging in again says *"This account has been switched off. Ask the person who invited you."*, but **only with the right password**. With a wrong one, the answer stays "Email or password is wrong", so a stranger can't use the login form to find out who was removed.
+- The owner can't be removed (no locking yourself out), and only the owner can remove anyone.
+- In the app, *Remove* needs two taps (like Delete), and the row stays in the list, dimmed, with **Removed** and *Give access back*.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -832,6 +847,7 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - **Alerts on an iPhone need the Home Screen app** (iOS 16.4+), not Safari. Each phone (and each browser) is turned on separately; the four switches are per person.
 - **Amazon prices aren't checked in the morning** (the server can't read Amazon), so Amazon price drops only alert after the phone's *Refresh OnTrack*.
 - **The morning round depends on GitHub's schedule,** which can run late (rarely, skip an hour). The round then runs at the next tick.
+- **Removing someone keeps their account and list**; there's no "delete account" yet. After *Give access back*, their old Shortcut keys stay dead: they make new ones in *Set up this phone*.
 - **Deleting has no undo yet**; that's what the "are you sure?" is for until the recycle bin.
 - **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
 - **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
@@ -1112,6 +1128,7 @@ All endpoints except `/health` and `/auth/signup|login|reset` need a login token
 | `GET` · `POST` · `DELETE` | `/invites` · `/invites/{id}` | Owner: list, make (7 days, one use) or cancel invites |
 | `GET` | `/users` | Owner: everyone with an account |
 | `POST` | `/users/{id}/reset` | Owner: a one-time password-reset code (2 days) |
+| `POST` | `/users/{id}/remove` · `/users/{id}/restore` | Owner: switch someone's account off (signed out everywhere, list kept), or back on |
 | `GET` | `/summary` | This period (dates, days left, budget, default, reset day), discounted total, spent this period, remaining, savings vs MRP, what fits, all items |
 | `PUT` | `/budget` | Set the budget (`amount`; `scope`: `every` for the default or `once` for this period only; optional `reset_day` 1–31). Answers with the current period |
 | `GET` | `/setup` | The Shortcuts' iCloud links for *Set up this phone* (from Railway variables) |
@@ -1371,3 +1388,5 @@ OnTrack/
 - `feature/notifications` (Challenge 41): **Settings → Notifications** with *Turn on* for this phone, four switches (price dropped, back in stock, budget resets tomorrow, still on your list) and *Send a test*. The server queues alerts with a dedupe key, holds them 10 pm–8 am on each person's clock, and sends through Firebase Cloud Messaging; the service worker shows them and a tap opens OnTrack
 - A daily round at 9 am per person (price check, then reminders), woken hourly by a GitHub Actions job calling `/cron/tick` with a shared secret, since Railway Free sleeps
 - 18 new tests with a fake Firebase and a fake clock (279 runs pass on SQLite and Postgres; the new ones fail on the old code), plus 14 browser checks for the Settings section (light, dark, iPhone Safari, a failed save, an older server) and the 267 earlier ones
+- Merged as PR #24 and set up: Firebase project, four Railway variables and two GitHub secrets. **The first test alert arrived on my iPhone** ("OnTrack alerts are on"), and the hourly job ran from GitHub
+- `feature/remove-access` (Challenge 42): **Remove** and **Give access back** in Settings → People and invites. Removing signs the person out everywhere at once, keeps their list, and stops their alerts and morning checks; the owner can't be removed. 10 new tests (289 pass on SQLite and Postgres), 19 new browser checks at 360 and 390 px, light and dark, plus the 281 earlier ones

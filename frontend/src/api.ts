@@ -161,6 +161,8 @@ export const createInvite = (note: string) => request<NewCode>('/invites', post(
 export const cancelInvite = (id: number) => request<void>(`/invites/${id}`, { method: 'DELETE' })
 export const listPeople = () => request<Person[]>('/users')
 export const createResetCode = (userId: number) => request<NewCode>(`/users/${userId}/reset`, { method: 'POST' })
+export const removeAccess = (userId: number) => request<void>(`/users/${userId}/remove`, { method: 'POST' })
+export const restoreAccess = (userId: number) => request<void>(`/users/${userId}/restore`, { method: 'POST' })
 
 // The link to send someone: this web app's address with the code on the end.
 export const linkFor = (kind: 'invite' | 'reset', code: string) =>

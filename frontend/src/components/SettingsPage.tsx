@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
   cancelInvite, changePassword, createInvite, createResetCode, createToken, getNotify, getServer, linkFor,
-  listInvites, listPeople, listTokens, logOut, revokeToken, saveServer, sendTestAlert, setNotify, updateMe,
+  listInvites, listPeople, listTokens, logOut, removeAccess, restoreAccess, revokeToken, saveServer, sendTestAlert,
+  setNotify, updateMe,
 } from '../api'
 import type { AlertKind, Invite, Me, NotifySettings, Person, Summary, TokenInfo } from '../types'
 import { alertState, turnOnAlerts, type AlertState } from '../alerts'
@@ -504,6 +505,7 @@ function People() {
   const [note, setNote] = useState('')
   const [fresh, setFresh] = useState<{ label: string; link: string } | null>(null)
   const [msg, setMsg] = useState<Msg>(null)
+  const [armed, setArmed] = useState<number | null>(null) // "Remove" tapped once: the next tap removes
 
   const load = () =>
     Promise.all([listPeople(), listInvites()])
@@ -540,6 +542,35 @@ function People() {
     }
   }
 
+  // Remove access: two taps, like Delete. They're signed out everywhere at
+  // once and can't log in; their list stays, so Give access back undoes it.
+  async function remove(p: Person) {
+    if (armed !== p.id) {
+      setArmed(p.id)
+      return
+    }
+    setArmed(null)
+    setMsg(null)
+    try {
+      await removeAccess(p.id)
+      setMsg({ text: `${p.name} can’t use OnTrack now and was signed out everywhere. Their list is kept.`, tone: 'muted' })
+      await load()
+    } catch (err) {
+      setMsg(failed(err))
+    }
+  }
+
+  async function restore(p: Person) {
+    setMsg(null)
+    try {
+      await restoreAccess(p.id)
+      setMsg({ text: `${p.name} can log in again with their password. Their Shortcuts need a new key.`, tone: 'muted' })
+      await load()
+    } catch (err) {
+      setMsg(failed(err))
+    }
+  }
+
   async function cancel(i: Invite) {
     try {
       await cancelInvite(i.id)
@@ -555,12 +586,30 @@ function People() {
       {fresh && <Reveal label={fresh.label} value={fresh.link} hint="Send this link yourself (message or email). It works once." />}
       <ul className="acct-list">
         {people.map((p) => (
-          <li key={p.id} className="acct-row">
+          <li key={p.id} className={p.removed_at ? 'acct-row is-removed' : 'acct-row'}>
             <div className="acct-row-text">
-              <span className="acct-row-name">{p.name}{p.is_admin && <span className="tag">Owner</span>}</span>
+              <span className="acct-row-name">
+                {p.name}
+                {p.is_admin && <span className="tag">Owner</span>}
+                {p.removed_at && <span className="tag tag-warn">Removed</span>}
+              </span>
               <span className="budget-note">{p.email} · {p.items} {p.items === 1 ? 'item' : 'items'}</span>
             </div>
-            <button className="btn btn-quiet" onClick={() => reset(p)}>Reset link</button>
+            <div className="acct-row-actions">
+              {p.removed_at ? (
+                <button className="btn btn-quiet" onClick={() => restore(p)}>Give access back</button>
+              ) : (
+                <>
+                  <button className="btn btn-quiet" onClick={() => reset(p)}>Reset link</button>
+                  {!p.is_admin && (
+                    <button className={armed === p.id ? 'btn btn-quiet is-armed' : 'btn btn-quiet'}
+                      onClick={() => remove(p)} onBlur={() => setArmed(null)}>
+                      {armed === p.id ? 'Tap to remove' : 'Remove'}
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </li>
         ))}
         {invites.map((i) => (

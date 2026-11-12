@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS users (
     timezone      TEXT    NOT NULL DEFAULT 'Asia/Kolkata',
     notify        TEXT    NOT NULL DEFAULT 'price_drop,budget_reset,waiting,back_in_stock',  -- alerts switched on
     daily_on      TEXT,                        -- local date of the last 9 am round (price check, reminders)
+    removed_at    TEXT,                        -- the owner switched this account off (NULL: can use OnTrack)
     created_at    TEXT    NOT NULL
 );
 
@@ -327,6 +328,8 @@ def migrate(conn) -> None:
                      "DEFAULT 'price_drop,budget_reset,waiting,back_in_stock'")
     if "daily_on" not in columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN daily_on TEXT")
+    if "removed_at" not in columns(conn, "users"):    # (remove access)
+        conn.execute("ALTER TABLE users ADD COLUMN removed_at TEXT")
     if columns(conn, "links") and "read_via" not in columns(conn, "links"):
         conn.execute("ALTER TABLE links ADD COLUMN read_via TEXT")
     if "user_id" not in columns(conn, "items"):

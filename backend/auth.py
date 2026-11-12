@@ -107,6 +107,9 @@ def _make_token(conn, user_id: int, kind: str, name: str) -> str:
 LAST_USED_EVERY = timedelta(hours=1)   # note "last used" at most once an hour: not a write per request
 
 
+SWITCHED_OFF = "This account has been switched off. Ask the person who invited you."
+
+
 def user_for_token(conn, secret: str | None) -> dict:
     """The user this token belongs to, or AuthError."""
     if not secret:
@@ -124,6 +127,8 @@ def user_for_token(conn, secret: str | None) -> dict:
     if not row:
         raise AuthError("This key or login isn't valid any more. Log in again.")
     user = dict(row)
+    if user["removed_at"]:                  # (their keys are deleted on removal; this is a second lock)
+        raise AuthError(SWITCHED_OFF)
     stale = (services._utcnow() - LAST_USED_EVERY).isoformat(timespec="seconds")
     if not user["last_used_at"] or user["last_used_at"] < stale:
         conn.execute("UPDATE tokens SET last_used_at = ? WHERE id = ?", (services.now(), user["token_id"]))
@@ -183,6 +188,8 @@ def _open_invite(conn, code: str):
 def create_invite(conn, admin: dict, note: str | None = None, for_user_id: int | None = None) -> dict:
     if not admin["is_admin"]:
         raise Forbidden("Only the owner can invite people.")
+    if for_user_id is not None and (_user_or_none(conn, for_user_id) or {}).get("removed_at"):
+        raise BadRequest("Give them access back first.")
     if for_user_id is not None and not conn.execute("SELECT 1 FROM users WHERE id = ?", (for_user_id,)).fetchone():
         raise services.NotFound(f"user {for_user_id}")
     code = new_secret()
@@ -218,10 +225,41 @@ def list_users(conn, admin: dict) -> list[dict]:
     if not admin["is_admin"]:
         raise Forbidden("Only the owner can see everyone.")
     rows = conn.execute(
-        "SELECT users.id, users.email, users.name, users.is_admin, users.created_at, "
+        "SELECT users.id, users.email, users.name, users.is_admin, users.created_at, users.removed_at, "
         "(SELECT COUNT(*) FROM items WHERE items.user_id = users.id) AS items "
         "FROM users ORDER BY users.id").fetchall()
     return [dict(r) | {"is_admin": bool(r["is_admin"])} for r in rows]
+
+
+def remove_access(conn, admin: dict, user_id: int) -> None:
+    """Switch someone's account off: every login and device key stops working
+    at once, and they can't log in again. Their list is kept, so
+    restore_access() brings everything back (they log in with their password
+    and make new device keys)."""
+    if not admin["is_admin"]:
+        raise Forbidden("Only the owner can remove people.")
+    target = conn.execute("SELECT id, is_admin, removed_at FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not target:
+        raise services.NotFound(f"user {user_id}")
+    if target["is_admin"]:
+        raise BadRequest("The owner's own account can't be removed.")
+    if target["removed_at"]:
+        return
+    conn.execute("UPDATE users SET removed_at = ? WHERE id = ?", (services.now(), user_id))
+    conn.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))                  # signed out everywhere
+    conn.execute("DELETE FROM invites WHERE for_user_id = ? AND used_at IS NULL", (user_id,))   # open reset links
+    conn.execute("DELETE FROM push_devices WHERE user_id = ?", (user_id,))            # no more alerts
+    conn.execute("DELETE FROM alerts WHERE user_id = ? AND sent_at IS NULL", (user_id,))
+    conn.commit()
+
+
+def restore_access(conn, admin: dict, user_id: int) -> None:
+    if not admin["is_admin"]:
+        raise Forbidden("Only the owner can give access back.")
+    if not conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone():
+        raise services.NotFound(f"user {user_id}")
+    conn.execute("UPDATE users SET removed_at = NULL WHERE id = ?", (user_id,))
+    conn.commit()
 
 
 # ------------------------------------------------- sign up, log in, reset
@@ -280,6 +318,8 @@ def login(conn, email: str, password: str) -> tuple[dict, str]:
     ok = verify_password(password[:PASSWORD_MAX], row["password_hash"] if row else _DUMMY_HASH)
     if not (row and ok):
         raise AuthError("Email or password is wrong.")   # never say which: that would confirm the email
+    if row["removed_at"]:                   # only said to someone who knows the password
+        raise AuthError(SWITCHED_OFF)
     token = _make_token(conn, row["id"], "session", "Web app")
     conn.commit()
     return _user(conn, row["id"]), token
@@ -293,6 +333,8 @@ def reset_password(conn, code: str, password: str) -> tuple[dict, str]:
     if not invite["for_user_id"]:
         raise BadRequest("That's an invite link, not a password reset. Use it to sign up.")
     user_id = invite["for_user_id"]
+    if (_user_or_none(conn, user_id) or {}).get("removed_at"):
+        raise BadRequest(SWITCHED_OFF)
     conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(password), user_id))
     conn.execute("UPDATE invites SET used_at = ? WHERE id = ?", (services.now(), invite["id"]))
     conn.execute("DELETE FROM tokens WHERE user_id = ? AND kind = 'session'", (user_id,))
@@ -316,6 +358,11 @@ def logout(conn, user: dict) -> None:
     if user["token_id"]:
         conn.execute("DELETE FROM tokens WHERE id = ?", (user["token_id"],))
         conn.commit()
+
+
+def _user_or_none(conn, user_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def _user(conn, user_id: int) -> dict:
