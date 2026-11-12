@@ -21,7 +21,7 @@ import re
 import socket
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import replace, dataclass, field
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -510,6 +510,224 @@ NO_PRICE_FROM_BROWSER = ("Got the name but no price. This isn't a single product
                          "or OnTrack can't read this store's prices yet.")
 
 
+# ---------------------------------------------- data hidden in the page
+#
+# Most modern shops build the page with JavaScript, but ship the product's
+# data inside the page as a JSON blob, so the page can show at once:
+#   <script id="__NEXT_DATA__" type="application/json">{...}</script>   Next.js (Meesho, many D2C brands)
+#   window.__INITIAL_STATE__ = {...};                                  Flipkart and others
+#   window.__PRELOADED_STATE__ = {...};                                AJIO, Nykaa and others
+#   window.__myx = {...}  (pdpData)                                    Myntra
+#   JSON.parse("{...}")                                                some shops escape it as a string
+# A blob holds lots of products (related items, "you may also like"), so the
+# one we want is the one whose NAME matches the page's own title. Its selling
+# price can be a number, a string, or a little object ({"value": 999},
+# {"discounted": 899, "mrp": 1299}), sometimes one level down (Myntra keeps
+# discountedPrice inside each size).
+
+NAME_KEYS = ("name", "title", "productName", "product_name", "displayName", "display_name")
+SELLING_KEYS = ("sellingPrice", "selling_price", "salePrice", "sale_price", "finalPrice", "final_price",
+                "offerPrice", "offer_price", "discountedPrice", "discounted_price", "discounted",
+                "specialPrice", "special_price", "current_retail", "currentPrice", "current_price",
+                "effectivePrice", "effective_price", "priceToPay", "price")
+MRP_KEYS = ("mrp", "MRP", "maxRetailPrice", "max_retail_price", "listPrice", "list_price", "originalPrice",
+            "original_price", "wasPrice", "was_price", "regularPrice", "regular_price", "strikePrice",
+            "strikeOffPrice", "reg_retail", "compareAtPrice", "compare_at_price")
+VALUE_KEYS = ("value", "amount", "decimalValue", "discounted", "selling", "final", "min", "price")
+IMAGE_KEYS = ("image", "imageUrl", "image_url", "imageURL", "images", "img", "thumbnail", "src", "secureSrc")
+BLOB = re.compile(r"(?:window\.)?(__[A-Za-z0-9_]+__|__myx|pdpData)\s*=\s*", re.S)
+WORDS = re.compile(r"[a-z0-9]+")
+
+
+def _number(v, depth: int = 0) -> float | None:
+    """A price from 899, "899.00", "₹1,299" or {"value": 899}."""
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float, str)):
+        n = parse_price(v)
+        return n if n is not None and 0 < n < 100_000_000 else None
+    if isinstance(v, dict) and depth < 2:
+        for k in VALUE_KEYS:
+            if k in v and (n := _number(v[k], depth + 1)) is not None:
+                return n
+    return None
+
+
+def _first(node: dict, keys, depth: int = 0) -> float | None:
+    """The first price under one of these keys, here or a little deeper."""
+    for k in keys:
+        if k in node and (n := _number(node[k])) is not None:
+            return n
+    if depth < 3:
+        for v in node.values():
+            for child in (v if isinstance(v, list) else [v])[:20]:
+                if isinstance(child, dict) and (n := _first(child, keys, depth + 1)) is not None:
+                    return n
+    return None
+
+
+def _image(node: dict, depth: int = 0) -> str | None:
+    """The product's photo: an image field here, or inside media / albums / images."""
+    found = _image_here(node)
+    if found or depth >= 3:
+        return found
+    for k in ("media", "albums", "images", "gallery", "assets"):
+        v = node.get(k)
+        for child in (v if isinstance(v, list) else [v])[:10]:
+            if isinstance(child, dict) and (found := _image(child, depth + 1)):
+                return found
+    return None
+
+
+def _image_here(node: dict) -> str | None:
+    for k in IMAGE_KEYS:
+        v = node.get(k)
+        if isinstance(v, list) and v:
+            v = v[0]
+        if isinstance(v, dict):
+            v = next((v[x] for x in ("secureSrc", "src", "url", "imageURL", "imageUrl") if isinstance(v.get(x), str)), None)
+        if isinstance(v, str) and (v.startswith("http") or v.startswith("//")):
+            return "https:" + v if v.startswith("//") else v
+    return None
+
+
+def _blobs(soup: BeautifulSoup, html: str):
+    """Every JSON blob in the page that might hold product data."""
+    for script in soup.find_all("script", type=re.compile(r"^application/json", re.I)):
+        text = script.string or script.get_text() or ""
+        if len(text) > 50:
+            try:
+                yield json.loads(text)
+            except json.JSONDecodeError:
+                pass
+    decoder = json.JSONDecoder()
+    for m in BLOB.finditer(html):
+        rest = html[m.end():m.end() + 6_000_000].lstrip()
+        try:
+            if rest.startswith('JSON.parse("'):      # JSON.parse("{\"a\":1}"): a string holding the JSON
+                literal, _ = decoder.raw_decode(rest[len("JSON.parse("):])
+                yield json.loads(literal)
+            elif rest[:1] in "{[":
+                value, _ = decoder.raw_decode(rest)
+                yield value
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+
+
+def _similar(a: str, b: str) -> float:
+    """How much of name a is in title b (0..1), word by word."""
+    words = set(WORDS.findall(a.lower()))
+    if not words:
+        return 0.0
+    return len(words & set(WORDS.findall(b.lower()))) / len(words)
+
+
+def page_title(soup: BeautifulSoup) -> str:
+    for el in (soup.find("meta", attrs={"property": "og:title"}), soup.find("meta", attrs={"name": "twitter:title"})):
+        if el and el.get("content"):
+            return el["content"]
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True):
+        return h1.get_text(" ", strip=True)
+    return soup.title.get_text(strip=True) if soup.title else ""
+
+
+def try_embedded(soup: BeautifulSoup, url: str, html: str) -> Product | None:
+    title = page_title(soup)
+    if not title:
+        return None
+    best, best_score, seen = None, 0.0, 0
+    for blob in _blobs(soup, html):
+        for node in _walk(blob):
+            seen += 1
+            if seen > 300_000:               # a giant page: stop rather than hang
+                break
+            name = next((node[k] for k in NAME_KEYS if isinstance(node.get(k), str)), None)
+            if not name or not 3 <= len(name) <= 300:
+                continue
+            score = _similar(name, title)
+            if score < 0.6 or score <= best_score:
+                continue
+            price = _first(node, SELLING_KEYS)
+            if price is None:
+                continue
+            best, best_score = (node, name, price), score
+    if not best:
+        return None
+    node, name, price = best
+    mrp = _first(node, MRP_KEYS)
+    if mrp is not None and mrp <= price:
+        mrp = None                            # an MRP is only worth showing when it's higher
+    og = soup.find("meta", attrs={"property": "og:image"})
+    return Product(url=url, ok=True, method="embedded", title=name, price=price, mrp=mrp,
+                   image=_image(node) or (og.get("content") if og else None))
+
+
+# Microdata: <div itemscope itemtype="https://schema.org/Product"> with
+# itemprop="name", itemprop="price" (content="..." or the text), itemprop="image".
+def try_microdata(soup: BeautifulSoup, url: str) -> Product | None:
+    for scope in soup.find_all(attrs={"itemtype": re.compile(r"schema\.org/Product$", re.I)}):
+        def prop(name):
+            el = scope.find(attrs={"itemprop": name})
+            if not el:
+                return None
+            return el.get("content") or el.get("src") or el.get("href") or el.get_text(" ", strip=True)
+        price = parse_price(prop("price") or prop("lowPrice"))
+        if price is not None:
+            return Product(url=url, ok=True, method="microdata", title=prop("name") or page_title(soup) or None,
+                           price=price, image=prop("image"))
+    return None
+
+
+# When there's no price, the page often says why, in its own product data.
+# Saying it plainly beats guessing "JavaScript":
+#   out of stock    offers.availability = OutOfStock / SoldOut / Discontinued
+#                   (Meesho), or <meta property="product:availability" content="out of stock">
+#   a list page     an ItemList of several products and no single product
+#                   (a Victoria's Secret category page)
+OUT_OF_STOCK = "Out of stock: the store shows no price for it right now. OnTrack keeps checking."
+LIST_PAGE = "This is a list of products, not a single product. Open one product and share or paste that."
+HOME_PAGE = "This is the shop's home page, not a product. Open one product and share or paste that."
+GONE = ("outofstock", "soldout", "discontinued", "out of stock", "sold out", "oos")
+
+
+def _json_ld_nodes(soup: BeautifulSoup):
+    for script in soup.find_all("script", type=re.compile(r"^application/ld\+json", re.I)):
+        data = _load_json_ld(script.string or script.get_text() or "")
+        if data is not None:
+            yield from _walk(data)
+
+
+def _types(node: dict) -> set[str]:
+    t = node.get("@type")
+    return {x for x in (t if isinstance(t, list) else [t]) if isinstance(x, str)}
+
+
+def explain_no_price(soup: BeautifulSoup) -> str | None:
+    """Why a page has no price, when the page itself says so; None otherwise."""
+    products, lists = [], []
+    for node in _json_ld_nodes(soup):
+        types = _types(node)
+        if PRODUCT_TYPES & types:
+            products.append(node)
+        elif "ItemList" in types and len(node.get("itemListElement") or []) >= 2:
+            lists.append(node)
+    for node in products:
+        offers = node.get("offers")
+        for offer in offers if isinstance(offers, list) else [offers]:
+            if isinstance(offer, dict):
+                availability = str(offer.get("availability") or "").lower().replace("https://schema.org/", "")
+                if any(word in availability for word in GONE):
+                    return OUT_OF_STOCK
+    meta = soup.find("meta", attrs={"property": "product:availability"}) \
+        or soup.find("meta", attrs={"property": "og:availability"})
+    if meta and str(meta.get("content", "")).strip().lower() in GONE:
+        return OUT_OF_STOCK
+    if lists and not products:
+        return LIST_PAGE
+    return None
+
+
 def try_meta(soup: BeautifulSoup, url: str) -> Product | None:
     def meta(*names):
         for n in names:
@@ -520,6 +738,12 @@ def try_meta(soup: BeautifulSoup, url: str) -> Product | None:
         return None
 
     price = parse_price(meta("product:price:amount", "og:price:amount", "price"))
+    if price is None:      # <meta name="twitter:label1" content="Price"> + twitter:data1 "₹1,299"
+        for i in ("1", "2"):
+            label = soup.find("meta", attrs={"name": f"twitter:label{i}"})
+            if label and "price" in str(label.get("content", "")).lower():
+                price = parse_price(meta(f"twitter:data{i}"))
+                break
     title = meta("og:title") or (soup.title.get_text(strip=True) if soup.title else None)
     if price is None and title is None:
         return None
@@ -605,13 +829,19 @@ def _extract(url: str, fetch: Fetcher, debug_dir: Path | None = None) -> Product
         lambda: try_amazon(soup, final_url, page.text),
         lambda: try_savana(final_url, page.text),
         lambda: try_json_ld(soup, final_url),
+        lambda: try_embedded(soup, final_url, page.text),
+        lambda: try_microdata(soup, final_url),
         lambda: try_meta(soup, final_url),
     ):
         result = attempt()
         if result and result.ok:
             return result
         best = best or result      # keep the first partial result / explanation
-    return best or Product(url=final_url, error="Couldn't find product details on this page.")
+    best = best or Product(url=final_url, error="Couldn't find product details on this page.")
+    reason = HOME_PAGE if urlsplit(final_url).path in ("", "/") else explain_no_price(soup)
+    if reason and not (best.error or "").startswith(("This is a category", "Amazon showed")):
+        best = replace(best, error=reason)    # the page says why: better than a guess
+    return best
 
 
 def main(argv: list[str]) -> None:
