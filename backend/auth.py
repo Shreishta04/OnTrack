@@ -226,7 +226,7 @@ def list_users(conn, admin: dict) -> list[dict]:
         raise Forbidden("Only the owner can see everyone.")
     rows = conn.execute(
         "SELECT users.id, users.email, users.name, users.is_admin, users.created_at, users.removed_at, "
-        "(SELECT COUNT(*) FROM items WHERE items.user_id = users.id) AS items "
+        "(SELECT COUNT(*) FROM items WHERE items.user_id = users.id AND items.deleted_at IS NULL) AS items "
         "FROM users ORDER BY users.id").fetchall()
     return [dict(r) | {"is_admin": bool(r["is_admin"])} for r in rows]
 

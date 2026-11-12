@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  cancelInvite, changePassword, createInvite, createResetCode, createToken, getNotify, getServer, linkFor,
+  cancelInvite, changePassword, createInvite, createResetCode, createToken, getNotify, getServer, getTrash, linkFor,
   listInvites, listPeople, listTokens, logOut, removeAccess, restoreAccess, revokeToken, saveServer, sendTestAlert,
   setNotify, updateMe,
 } from '../api'
@@ -16,7 +16,7 @@ import BudgetEditor from './BudgetEditor'
 import Price from './Price'
 import {
   BackIcon, BellIcon, BoxIcon, CalendarIcon, ChevronRightIcon, ClockIcon, GlobeIcon, KeyIcon, LockIcon, LogOutIcon,
-  MoonIcon, PeopleIcon, PhoneIcon, SunIcon, TagDownIcon, WalletIcon,
+  MoonIcon, PeopleIcon, PhoneIcon, SunIcon, TagDownIcon, TrashIcon, WalletIcon,
 } from './Icons'
 
 interface SettingsPageProps {
@@ -29,18 +29,29 @@ interface SettingsPageProps {
   onBudgetSaved: () => Promise<void>
   onServerChanged: () => Promise<void>
   onOpenSetup: () => void // Set up this phone
+  onOpenTrash: () => void // Recently deleted
 }
 
 type Part = 'profile' | 'budget' | 'region' | 'password' | 'devices' | 'people'
 
 // Settings, as a page of its own (/settings). Each row opens its editor right
 // underneath it; one at a time, so the page never gets long.
-export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, onBudgetSaved, onServerChanged, onOpenSetup }: SettingsPageProps) {
+export default function SettingsPage({
+  me, summary, theme, notes, onBack, onMe, onBudgetSaved, onServerChanged, onOpenSetup, onOpenTrash,
+}: SettingsPageProps) {
   const [open, setOpen] = useState<Part | null>(null)
   const [keyCount, setKeyCount] = useState<number | null>(null)
+  const [trashCount, setTrashCount] = useState<number | null>(null)
   const money = useMoney()
   const toggle = (part: Part) => setOpen(open === part ? null : part)
   const country = COUNTRIES.find((c) => c.code === me.country)?.name ?? me.country
+
+  // How many items are in Recently deleted, for its row (an older server has no /trash).
+  useEffect(() => {
+    getTrash()
+      .then((items) => setTrashCount(Array.isArray(items) ? items.length : null))
+      .catch(() => setTrashCount(null))
+  }, [])
 
   // How many device keys there are, for the row's number (logins don't count).
   useEffect(() => {
@@ -150,6 +161,7 @@ export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, 
 
       <h2 className="set-heading">Account</h2>
       <div className="set-group">
+        <Row icon={<TrashIcon />} label="Recently deleted" value={trashCount || undefined} open={false} onToggle={onOpenTrash} />
         <Row icon={<LockIcon />} label="Change password" open={open === 'password'} onToggle={() => toggle('password')}>
           <Password />
         </Row>

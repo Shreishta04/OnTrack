@@ -59,7 +59,9 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Mark as bought** saves the purchase price and date; the price can be edited afterwards (coupons, bank offers). **Undo** clears them
 - **Edit any item:** the name, a note (size, colour, for whom), and a price: what I paid on Bought, my own price while no store gives one. A store's price isn't typed over: it comes from the store and updates on refresh
 - **Type a price** straight on a card that says *Needs a price*, instead of deleting it and adding it again by hand. The store link stays, so a later refresh can still bring in the store's own price
-- **Delete several at once** from the tick bar, on every tab. It always asks first (*"Delete 3 items? This can't be undone."*)
+- **Delete several at once** from the tick bar, on every tab. From 5 items it asks first
+- **Undo:** after Delete, a move or Mark bought, a bar at the bottom says what happened (*"Deleted “Desk lamp”"*, *"Moved 3 items to Later"*) with **Undo** for 6 seconds. Undo puts each item back on the list it came from
+- **Recently deleted:** Delete is one tap, because nothing is lost: deleted items wait in a trash (the 🗑 button at the top, or **Settings → Recently deleted**) for 30 days, out of every list, total and price check. **Restore** brings one back with its prices and history; **Empty now** clears it (two taps)
 - Items a store wouldn't show yet are called **"Amazon item"** (the store's name) instead of their long link, until a check finds the real name. Store names are spelled properly (*Victoria's Secret*, *TikTok*, *H&M*)
 - Ask for one list at a time (`?status=planned|later|purchased|all`) for the app's tabs
 
@@ -830,6 +832,22 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - The owner can't be removed (no locking yourself out), and only the owner can remove anyone.
 - In the app, *Remove* needs two taps (like Delete), and the row stays in the list, dimmed, with **Removed** and *Give access back*.
 
+### 43. A delete you can take back
+
+**Symptom:** a delete was final. Two "are you sure?" steps guarded it, which made every delete slower, and a slip on *Move to Later* or *Mark bought* had to be fixed by hand.
+
+**Fix, agreed in a mockup first:**
+- *Soft delete:* `items.deleted_at`. Delete only sets it; every read (lists, totals, Analytics, refresh, the phone's list, alerts, the Monday reminder) skips those items. **Restore** clears it, so links and price history come back untouched.
+- *30 days:* the 9 am round deletes anything older for good, and so does opening Recently deleted, in case the morning job didn't run.
+- *Undo* is the same request in reverse: Restore after a Delete, the old status after a move (each item to its own list, which matters on the All tab).
+- With Undo there, Delete became one tap; the tick bar still asks from 5 items.
+
+**Problems found and fixed:**
+- *Saving the same link again* would have been refused as "already on your list", by an item nobody can see. The duplicate check now deletes the old copy for good and lets the new one in.
+- *Five buttons in the header* pushed Settings off a 360 px phone. Below 380 px the buttons and the title are a little smaller.
+- *Two older tests* expected a real delete (the copy script's id gap, links going with their item); they now empty the trash first.
+- *The Undo bar and the + button* both wanted the bottom right on the phone; the bar stops short of it.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -848,7 +866,8 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - **Amazon prices aren't checked in the morning** (the server can't read Amazon), so Amazon price drops only alert after the phone's *Refresh OnTrack*.
 - **The morning round depends on GitHub's schedule,** which can run late (rarely, skip an hour). The round then runs at the next tick.
 - **Removing someone keeps their account and list**; there's no "delete account" yet. After *Give access back*, their old Shortcut keys stay dead: they make new ones in *Set up this phone*.
-- **Deleting has no undo yet**; that's what the "are you sure?" is for until the recycle bin.
+- **Saving a link that's in Recently deleted starts fresh:** the old copy (and its price history) is deleted for good and a new item is made, instead of restoring it. Restore it first to keep its history.
+- **No Undo for edits** (a renamed item or a typed price); Undo covers Delete, moves and Mark bought.
 - **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
 - **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
 - **Search** looks at names and store names, on the tab you're on; it doesn't search notes or other tabs at once (use the All tab for that).
@@ -1141,7 +1160,9 @@ All endpoints except `/health` and `/auth/signup|login|reset` need a login token
 | `POST` | `/items` | Add by hand: name + price, optional `url` (saved without contacting the store; Refresh can fill in the store's price later) |
 | `POST` | `/items/{id}/links` | Add another store's link to an item |
 | `PATCH` | `/items/{id}` | Edit name, status, priority, manual price, note, purchased price |
-| `DELETE` | `/items/{id}` · `/links/{id}` | Remove an item or a link |
+| `DELETE` | `/items/{id}` · `/links/{id}` | Move an item to Recently deleted (30 days); remove a link |
+| `POST` | `/items/{id}/restore` | Bring an item back from Recently deleted (also Undo after Delete) |
+| `GET` · `DELETE` | `/trash` | Recently deleted, newest first (`deleted_at`, `gone_on`); empty it now |
 | `POST` | `/refresh?force=` | Re-check prices: skips bought items, links checked in the last hour (unless they still have no price), and phone-only stores (Amazon). Returns `checked`, `skipped_recent`, `phone_only`, `changed`, `failed` |
 | `POST` | `/items/{id}/refresh` | Re-check one item |
 | `GET` | `/refresh/phone-list?force=` | Amazon links the phone should re-download: not bought, and either not checked in the last hour or still without a price |
@@ -1248,7 +1269,7 @@ OnTrack/
 - [x] Stuck rows explain why and how to fix them; Add by hand (name, price, optional link); typed prices labelled; store letters; short links corrected after a check
 - [x] Refresh button in the header (↻), and reload when the app's tab comes back into view; the server never fetches phone-only stores (Amazon)
 - [x] Edit an item (name, note, my price or what I paid), type a price on a card, delete several from the tick bar
-- [ ] Undo message after Delete and moves (two-tap Delete, the tick bar's "are you sure?" and "Undo purchase" cover the main cases for now)
+- [x] Undo bar after Delete, moves and Mark bought; Recently deleted (30 days, Restore, Empty now) from a 🗑 button and Settings
 - [x] Browser extension: "Add to OnTrack" on the laptop, sending the page you're viewing to `/items/from-html`; Update price for saved items; Remove for pages without a price
 - [x] Installable PWA: home-screen icon and name, full screen, safe areas, works offline (read-only last list), Android share target; phone layout with the add forms behind a + button
 - [x] Postgres support: one setting (`DATABASE_URL`) picks SQLite or Postgres; tests run on both; a script copies my data across, keeping ids
@@ -1390,3 +1411,5 @@ OnTrack/
 - 18 new tests with a fake Firebase and a fake clock (279 runs pass on SQLite and Postgres; the new ones fail on the old code), plus 14 browser checks for the Settings section (light, dark, iPhone Safari, a failed save, an older server) and the 267 earlier ones
 - Merged as PR #24 and set up: Firebase project, four Railway variables and two GitHub secrets. **The first test alert arrived on my iPhone** ("OnTrack alerts are on"), and the hourly job ran from GitHub
 - `feature/remove-access` (Challenge 42): **Remove** and **Give access back** in Settings → People and invites. Removing signs the person out everywhere at once, keeps their list, and stops their alerts and morning checks; the owner can't be removed. 10 new tests (289 pass on SQLite and Postgres), 19 new browser checks at 360 and 390 px, light and dark, plus the 281 earlier ones
+- Merged as PR #25 and deployed; the hourly alerts job ran by hand with a green tick (48 s)
+- `feature/recycle-bin` (Challenge 43): Undo bar after Delete, moves and Mark bought; **Recently deleted** for 30 days with Restore and Empty now, from a new 🗑 button in the header and **Settings → Recently deleted**; Delete is one tap now, the tick bar asks from 5. 16 new tests (305 pass on SQLite and Postgres; 14 fail on the old code), 51 new browser checks at 360, 390 and 1280 px, plus the 300 earlier ones

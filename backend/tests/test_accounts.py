@@ -354,8 +354,9 @@ def test_an_old_database_is_upgraded_without_losing_anything(backend, tmp_path, 
     assert services.item_view(conn, b, item_b)["links"][0]["url"] == "https://www.amazon.in/dp/B0OLD"
     with pytest.raises(services.Duplicate):          # but still unique for one person
         services.create_manual_item(conn, a, "Again", 1, url="https://www.amazon.in/dp/B0OLD")
-    if backend == "sqlite":                           # deleting an item still deletes its links
+    if backend == "sqlite":                           # deleting an item for good still deletes its links
         services.delete_item(conn, a, 4)
+        services.purge_trash(conn, a, everything=True)
         assert conn.execute("SELECT COUNT(*) AS n FROM price_history").fetchone()["n"] == 0
     conn.close()
 

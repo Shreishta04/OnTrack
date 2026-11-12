@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices, save, saved } from './api'
+import {
+  Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices, restoreItem, save, saved,
+} from './api'
 import type { Item, Me, Status, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
 import Tabs from './components/Tabs'
@@ -11,13 +13,15 @@ import ItemList from './components/ItemList'
 import type { ItemEdit, RowAction } from './components/ItemRow'
 import SettingsPage from './components/SettingsPage'
 import AnalyticsPage from './components/AnalyticsPage'
+import TrashPage from './components/TrashPage'
+import UndoBar, { type Undo } from './components/UndoBar'
 import BudgetSetup from './components/BudgetSetup'
 import SetupPage from './components/SetupPage'
 import { device, installed, markSetupLater, phoneSetUp, setupLater } from './device'
 import BudgetSheet from './components/BudgetSheet'
 import AuthScreen, { type AuthMode } from './components/AuthScreen'
 import { MoneyProvider } from './money'
-import { ChartIcon, CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon } from './components/Icons'
+import { ChartIcon, CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon, TrashIcon } from './components/Icons'
 import { displayName, refreshNote, storeName } from './format'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
@@ -179,6 +183,25 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // back: two quick moves would otherwise flicker the first item back.
   const changes = useRef(0)
 
+  // The Undo bar after Delete, a move or Mark bought (components/UndoBar.tsx).
+  // A newer action replaces it; it goes by itself after a few seconds.
+  const [undo, setUndo] = useState<Undo | null>(null)
+  const undoCount = useRef(0)
+  function offerUndo(text: string, run: () => Promise<unknown>) {
+    undoCount.current += 1
+    setUndo({ id: undoCount.current, text, run })
+  }
+  async function runUndo(u: Undo) {
+    setUndo(null)
+    changes.current += 1 // a reload already on its way is out of date now
+    try {
+      await u.run()
+    } catch (e) {
+      setNote({ text: `Couldn’t undo that: ${(e as Error).message}`, tone: 'warn' })
+    }
+    await load()
+  }
+
   async function load() {
     const startedAt = changes.current
     try {
@@ -313,10 +336,18 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       return
     }
     showNow([item.id], action === 'delete' ? 'delete' : typeof action === 'object' ? action : { status: action })
+    const name = `“${displayName(item)}”`
     try {
-      if (action === 'delete') await deleteItem(item.id)
-      else if (typeof action === 'object') await patchItem(item.id, action.edit) // Edit, or a typed price
-      else await patchItem(item.id, { status: action })
+      if (action === 'delete') {
+        await deleteItem(item.id)
+        offerUndo(`Deleted ${name}`, () => restoreItem(item.id))
+      } else if (typeof action === 'object') {
+        await patchItem(item.id, action.edit) // Edit, or a typed price
+      } else {
+        await patchItem(item.id, { status: action })
+        const from = item.status
+        offerUndo(movedText(name, action), () => patchItem(item.id, { status: from }))
+      }
     } catch (e) {
       setNote({ text: `Couldn’t save that: ${(e as Error).message}`, tone: 'warn' })
     }
@@ -406,9 +437,11 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       const n = pickedItems.length
       showNow(pickedItems.map((i) => i.id), 'delete')
       setPicked(new Set())
+      const gone = pickedItems
       try {
-        await Promise.all(pickedItems.map((i) => deleteItem(i.id)))
-        setNote({ text: `Deleted ${n} ${n === 1 ? 'item' : 'items'}.`, tone: 'muted' })
+        await Promise.all(gone.map((i) => deleteItem(i.id)))
+        offerUndo(n === 1 ? `Deleted “${displayName(gone[0])}”` : `Deleted ${n} items`,
+          () => Promise.all(gone.map((i) => restoreItem(i.id))))
         setPicked(new Set())
       } catch (e) {
         setNote({ text: (e as Error).message, tone: 'warn' })
@@ -425,13 +458,12 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     try {
       await Promise.all(targets.map((i) => patchItem(i.id, { status })))
       const n = targets.length
-      const things = `${n} ${n === 1 ? 'item' : 'items'}`
-      setNote({
-        text: n === 0 ? 'Those are already there, so nothing moved.'
-          : status === 'purchased' ? `Marked ${things} as bought.`
-          : status === 'later' ? `Moved ${things} to Later.` : `Moved ${things} back to your wish list.`,
-        tone: 'muted',
-      })
+      if (n === 0) setNote({ text: 'Those are already there, so nothing moved.', tone: 'muted' })
+      else {
+        // each one goes back to the list it came from (on All they can differ)
+        offerUndo(movedText(n === 1 ? `“${displayName(targets[0])}”` : `${n} items`, status),
+          () => Promise.all(targets.map((i) => patchItem(i.id, { status: i.status }))))
+      }
       setPicked(new Set())
     } catch (e) {
       setNote({ text: (e as Error).message, tone: 'warn' })
@@ -494,12 +526,17 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
         onBudgetSaved={load}
         onServerChanged={load}
         onOpenSetup={() => nav.go('setup')}
+        onOpenTrash={() => nav.go('trash')}
       />
     )
   }
 
   if (nav.page === 'setup' && me) {
     return <SetupPage notes={notes} onBack={nav.back} />
+  }
+
+  if (nav.page === 'trash' && me) {
+    return <TrashPage notes={notes} onBack={nav.back} onChanged={load} />
   }
 
   if (nav.page === 'analytics' && me) {
@@ -547,6 +584,9 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
             onClick={handleRefresh}
           >
             <RefreshIcon />
+          </button>
+          <button className="icon-btn" aria-label="Recently deleted" title="Recently deleted" onClick={() => nav.go('trash')} disabled={!me}>
+            <TrashIcon />
           </button>
           <button className="icon-btn" aria-label="Settings" onClick={() => nav.go('settings')} disabled={!me}>
             <GearIcon />
@@ -638,6 +678,9 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           onClear={() => setPicked(new Set())}
         />
       )}
+      {undo && !selecting && (
+        <UndoBar undo={undo} roomForFab={phone && !searching} onUndo={runUndo} onGone={() => setUndo(null)} />
+      )}
       {phone && summary && !offlineSince && !selecting && !searching && (
         <button className="fab" aria-label="Add something" onClick={() => nav.open('add')}>
           <PlusIcon />
@@ -657,6 +700,11 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       )}
     </div>
   )
+}
+
+// The Undo bar's line after a move: "Moved “Kurta” to Later", "Marked 3 items bought".
+function movedText(what: string, to: Status): string {
+  return to === 'purchased' ? `Marked ${what} bought` : to === 'later' ? `Moved ${what} to Later` : `Moved ${what} to your wish list`
 }
 
 // What the note under the header says after an add.

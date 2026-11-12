@@ -1006,6 +1006,20 @@ input {
   }
 }
 
+/* Five header buttons on a small phone (360 px): a little smaller still */
+@media (max-width: 380px) {
+  .brand {
+    font-size: 26px;
+  }
+  .header-actions {
+    gap: 4px;
+  }
+  .header-actions .icon-btn {
+    width: 38px;
+    height: 38px;
+  }
+}
+
 /* ============================================================
    Sign in, sign up, new password
    ============================================================ */
@@ -2485,4 +2499,117 @@ a.btn-secondary {
 .tag-warn {
   color: var(--warn);
   border-color: var(--warn);
+}
+
+
+/* ============================================================
+   Recycle bin: the Undo bar and Recently deleted
+   ============================================================ */
+
+.undo-bar {
+  position: fixed;
+  z-index: 14;
+  left: max(16px, env(safe-area-inset-left));
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 12px));
+  margin: 0 auto;
+  max-width: 440px;
+  min-height: 54px;
+  padding: 8px 8px 8px 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--hero-bg);
+  color: var(--hero-text);
+  box-shadow: var(--fab-shadow);
+  animation: fade-up 0.25s var(--ease);
+}
+/* on the phone, leave the + button its corner */
+.undo-bar.has-fab {
+  right: calc(max(20px, calc(env(safe-area-inset-right) + 16px)) + 58px + 12px);
+  margin: 0;
+}
+.undo-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.undo-btn {
+  flex-shrink: 0;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ring-spent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.undo-btn:hover {
+  background: var(--hero-line);
+}
+/* the thin line along the bottom that runs out with the time */
+.undo-timer {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: var(--ring-planned);
+  transform-origin: left;
+  animation-name: undo-run;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes undo-run {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+.trash-lead {
+  margin: 0 4px 14px;
+}
+.trash-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+}
+.trash-row + .trash-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 78px;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+}
+.trash-row .thumb {
+  width: 48px;
+  height: 48px;
+}
+.trash-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.trash-name {
+  font-size: 15px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trash-empty-btn.is-armed {
+  background: var(--warn);
+  color: var(--surface);
 }

@@ -45,6 +45,7 @@ def sqlite_list(tmp_path, monkeypatch):
     services.update_item(conn, UID, later_id, status="later")
     services.update_item(conn, UID, bought_id, status="purchased")
     services.delete_item(conn, UID, services.create_manual_item(conn, UID, "Deleted thing", 10))  # leaves a gap in ids
+    services.purge_trash(conn, UID, everything=True)                  # (deleted for good, not just Recently deleted)
 
     # A second, cheaper price check, so the watch has price history to copy.
     cheaper = Product(url=watch.url, ok=True, title="Fastrack Ryz Watch", price=1799, mrp=3499, method="amazon")

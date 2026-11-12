@@ -7,7 +7,7 @@
 // A header rather than a cookie, because Safari blocks cookies between the
 // web app's site (Vercel) and the server's (Railway).
 
-import type { AlertKind, NotifySettings, PeriodRow, SetupLinks, TestResult, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
+import type { TrashItem, AlertKind, NotifySettings, PeriodRow, SetupLinks, TestResult, AuthResult, DeviceToken, Invite, Item, Me, NewCode, Person, RefreshResult, Status, Summary, TokenInfo } from './types'
 
 const SERVER_KEY = 'ontrack.server'
 const TOKEN_KEY = 'ontrack.token'
@@ -191,7 +191,10 @@ export const patchItem = (id: number, fields: {
 // Re-check prices on the server (every store except Amazon, which the iPhone does).
 export const refreshPrices = () => request<RefreshResult>('/refresh', { method: 'POST' })
 
-export const deleteItem = (id: number) => request<void>(`/items/${id}`, { method: 'DELETE' })
+export const deleteItem = (id: number) => request<void>(`/items/${id}`, { method: 'DELETE' }) // to Recently deleted
+export const restoreItem = (id: number) => request<Item>(`/items/${id}/restore`, { method: 'POST' })
+export const getTrash = () => request<TrashItem[]>('/trash')
+export const emptyTrash = () => request<void>('/trash', { method: 'DELETE' })
 
 // scope "every": the default for every period; "once": just this period.
 // resetDay: the day each period starts (salary day); left out, it stays.

@@ -90,6 +90,8 @@ src/
     ├── AnalyticsPage.tsx  /analytics: this period, six periods as bars against the budget, past periods, spend by store
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
     ├── SetupPage.tsx      /setup: Set up this phone (different steps per device)
+    ├── TrashPage.tsx      /trash: Recently deleted (Restore, days left, Empty now)
+    ├── UndoBar.tsx        the bar after Delete, a move or Mark bought: what happened + Undo, for 6 seconds
     ├── AddLink.tsx        paste-a-link box (the server downloads the page; on an iPhone, sharing with the Shortcut is better)
     ├── AddByHand.tsx      name, optional link and price, for anything a store won't let us read
     ├── AddSheet.tsx       the phone's add sheet: both add forms, behind the + button
@@ -116,7 +118,7 @@ src/
 
 ## Pages and the Back button
 
-There are four pages, `/` (the list), `/settings`, `/analytics` and `/setup`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
+There are five pages, `/` (the list), `/settings`, `/analytics`, `/setup` and `/trash`, plus things that open on top: the add sheet, the budget sheet and the search bar. `useNav` keeps all of them in the browser's history:
 
 - Opening a page or a sheet adds one history entry (`history.pushState`); closing it (✕, Save, Escape) goes back one entry, exactly what the phone's Back does. So the phone's Back button or swipe closes a sheet, and returns from Settings or Analytics to the list.
 - The pushes happen in click handlers, never in effects: React's development mode runs effects twice, which would push two entries.

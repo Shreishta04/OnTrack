@@ -697,7 +697,26 @@ def patch_item(item_id: int, body: ItemPatch, conn=Depends(get_db), user=Depends
 
 @app.delete("/items/{item_id}", status_code=204)
 def remove_item(item_id: int, conn=Depends(get_db), user=Depends(current_user)):
+    """Move an item to Recently deleted (restorable for 30 days)."""
     services.delete_item(conn, user["id"], item_id)
+
+
+@app.post("/items/{item_id}/restore")
+def post_item_restore(item_id: int, conn=Depends(get_db), user=Depends(current_user)):
+    """Bring an item back from Recently deleted (also the Undo after Delete). Answers the item."""
+    return services.restore_item(conn, user["id"], item_id)
+
+
+@app.get("/trash")
+def get_trash(conn=Depends(get_db), user=Depends(current_user)):
+    """Recently deleted, newest first; each item has `deleted_at` and `gone_on` (the day it's deleted for good)."""
+    return services.list_trash(conn, user["id"])
+
+
+@app.delete("/trash", status_code=204)
+def empty_trash(conn=Depends(get_db), user=Depends(current_user)):
+    """Empty now: everything in Recently deleted goes for good."""
+    services.purge_trash(conn, user["id"], everything=True)
 
 
 @app.post("/items/{item_id}/links", status_code=201)

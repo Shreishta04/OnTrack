@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS items (
     note         TEXT,
     purchased_price DOUBLE PRECISION,                      -- what you actually paid
     purchased_at TEXT,                         -- when you actually bought it
+    deleted_at   TEXT,                         -- in Recently deleted since then (NULL: on a list); gone after 30 days
     created_at   TEXT    NOT NULL
 );
 
@@ -330,6 +331,8 @@ def migrate(conn) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN daily_on TEXT")
     if "removed_at" not in columns(conn, "users"):    # (remove access)
         conn.execute("ALTER TABLE users ADD COLUMN removed_at TEXT")
+    if "deleted_at" not in columns(conn, "items"):    # (recycle bin)
+        conn.execute("ALTER TABLE items ADD COLUMN deleted_at TEXT")
     if columns(conn, "links") and "read_via" not in columns(conn, "links"):
         conn.execute("ALTER TABLE links ADD COLUMN read_via TEXT")
     if "user_id" not in columns(conn, "items"):
