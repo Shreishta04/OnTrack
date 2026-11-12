@@ -194,7 +194,7 @@ def _reminders(conn, uid: int, today: date) -> None:
 
     if today.weekday() == 0:                       # Mondays
         cutoff = (services._utcnow() - timedelta(days=WAITING_DAYS)).isoformat(timespec="seconds")
-        rows = conn.execute("SELECT name FROM items WHERE user_id = ? AND status = 'planned' "
+        rows = conn.execute("SELECT name FROM items WHERE user_id = ? AND status = 'planned' AND deleted_at IS NULL "
                             "AND created_at < ? ORDER BY created_at", (uid, cutoff)).fetchall()
         if rows:
             names = [replies.short(r["name"]) for r in rows]
@@ -218,6 +218,7 @@ async def tick(conn, extract_fn, send: Sender, at: datetime | None = None) -> di
         conn.execute("UPDATE users SET daily_on = ? WHERE id = ?", (today, uid))   # first: a crash won't loop
         conn.commit()
         try:
+            services.purge_trash(conn, uid)            # Recently deleted: gone after 30 days
             await services.refresh(conn, uid, extract_fn)
             _reminders(conn, uid, local.date())
             conn.commit()

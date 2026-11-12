@@ -40,7 +40,7 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
   // The number of items "Mark bought" was armed for. If the ticks change,
   // the number no longer matches and the question quietly goes away.
   const [armedFor, setArmedFor] = useState<number | null>(null)
-  // Delete always asks first (there's no undo yet), for the same number of items.
+  // Delete asks first from CONFIRM_FROM items (fewer: the Undo bar covers a slip).
   const [deleteFor, setDeleteFor] = useState<number | null>(null)
   const confirmingDelete = deleteFor != null && deleteFor === picked.length
 
@@ -108,7 +108,7 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
       {confirmingDelete ? (
         <div className="select-confirm">
           <p>
-            Delete {picked.length === 1 ? 'this item' : `${picked.length} items`}? This can’t be undone.
+            Delete {picked.length} items? They’ll be in Recently deleted for 30 days.
           </p>
           <div className="select-actions">
             <button className="btn btn-secondary" disabled={busy} onClick={() => setDeleteFor(null)}>
@@ -173,8 +173,9 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
               </button>
             </>
           )}
-          {/* on every tab; asks first */}
-          <button className="btn btn-quiet select-delete" disabled={busy} onClick={() => setDeleteFor(picked.length)}>
+          {/* on every tab; asks first for 5 or more */}
+          <button className="btn btn-quiet select-delete" disabled={busy}
+            onClick={() => (picked.length >= CONFIRM_FROM ? setDeleteFor(picked.length) : run('delete'))}>
             Delete
           </button>
         </div>

@@ -159,3 +159,10 @@ export interface TestResult {
   failed: number
   devices: number
 }
+
+// An item in Recently deleted: the item as it was, when it was deleted, and
+// the day it goes for good (30 days later).
+export interface TrashItem extends Item {
+  deleted_at: string
+  gone_on: string // YYYY-MM-DD
+}

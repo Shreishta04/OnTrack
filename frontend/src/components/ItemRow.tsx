@@ -38,23 +38,12 @@ interface ItemRowProps {
 export default function ItemRow({ item, showTag, onAction, picked, onPick }: ItemRowProps) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)               // a request is in progress
-  const [confirmDelete, setConfirmDelete] = useState(false) // first tap on Delete
   const [editing, setEditing] = useState(false)
 
   async function run(action: RowAction) {
     setBusy(true)
     await onAction(item, action)
     setBusy(false)
-  }
-
-  function handleDelete() {
-    if (!confirmDelete) {
-      // First tap only arms the button; it calms down again after 3 seconds.
-      setConfirmDelete(true)
-      setTimeout(() => setConfirmDelete(false), 3000)
-      return
-    }
-    run('delete')
   }
 
   const bought = item.status === 'purchased'
@@ -213,12 +202,9 @@ export default function ItemRow({ item, showTag, onAction, picked, onPick }: Ite
             <button className="btn btn-quiet" disabled={busy} onClick={() => setEditing(true)}>
               Edit
             </button>
-            <button
-              className={confirmDelete ? 'btn btn-quiet is-armed' : 'btn btn-quiet'}
-              disabled={busy}
-              onClick={handleDelete}
-            >
-              {confirmDelete ? 'Tap again to delete' : 'Delete'}
+            {/* one tap: it goes to Recently deleted, and the Undo bar can bring it straight back */}
+            <button className="btn btn-quiet" disabled={busy} onClick={() => run('delete')}>
+              Delete
             </button>
           </div>
           )}

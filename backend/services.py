@@ -445,8 +445,15 @@ def _known_link(conn: sqlite3.Connection, uid: int, url: str) -> sqlite3.Row | N
     price is a stuck one (e.g. Amazon showed the server a bot-check), so we
     return it to be filled in instead of refusing.
     """
-    row = conn.execute("SELECT id, item_id, price FROM links WHERE url = ? AND user_id = ?",
+    row = conn.execute("SELECT links.id, links.item_id, links.price, items.deleted_at FROM links "
+                       "JOIN items ON items.id = links.item_id WHERE links.url = ? AND links.user_id = ?",
                        (url, uid)).fetchone()
+    if row and row["deleted_at"]:
+        # Saved again while it's in Recently deleted: the old copy goes for
+        # good and this one starts fresh (otherwise it could never be re-added).
+        conn.execute("DELETE FROM items WHERE id = ?", (row["item_id"],))
+        conn.commit()
+        return None
     if row and row["price"] is not None:
         raise Duplicate(row["item_id"],row["id"])
     return row
@@ -569,10 +576,54 @@ def update_item(conn, uid: int, item_id: int, **fields) -> None:
         conn.commit()
 
 
+TRASH_DAYS = 30
+
+
 def delete_item(conn, uid: int, item_id: int) -> None:
+    """Move an item to Recently deleted. It leaves every list, total, price
+    check and alert, but keeps its links and price history, so restore_item()
+    brings it back exactly as it was. After TRASH_DAYS it's deleted for good."""
     _require_item(conn, uid, item_id)
-    conn.execute("DELETE FROM items WHERE id = ?", (item_id,))   # links + history cascade
+    conn.execute("UPDATE items SET deleted_at = ? WHERE id = ?", (now(), item_id))
     conn.commit()
+
+
+def restore_item(conn, uid: int, item_id: int) -> dict:
+    if not conn.execute("UPDATE items SET deleted_at = NULL WHERE id = ? AND user_id = ? "
+                        "AND deleted_at IS NOT NULL", (item_id, uid)).rowcount:
+        raise NotFound(f"deleted item {item_id}")
+    conn.commit()
+    return item_view(conn, uid, item_id)
+
+
+def purge_trash(conn, uid: int, everything: bool = False) -> int:
+    """Delete for good: items in Recently deleted for over TRASH_DAYS (or all
+    of them, for "Empty now"). Links and price history go with them."""
+    if everything:
+        cur = conn.execute("DELETE FROM items WHERE user_id = ? AND deleted_at IS NOT NULL", (uid,))
+    else:
+        cutoff = (_utcnow() - timedelta(days=TRASH_DAYS)).isoformat(timespec="seconds")
+        cur = conn.execute("DELETE FROM items WHERE user_id = ? AND deleted_at < ?", (uid, cutoff))
+    conn.commit()
+    return cur.rowcount
+
+
+def list_trash(conn, uid: int) -> list[dict]:
+    """Recently deleted, newest first, each with the day it goes for good."""
+    purge_trash(conn, uid)                   # even if the morning job didn't run
+    rows = conn.execute("SELECT * FROM items WHERE user_id = ? AND deleted_at IS NOT NULL "
+                        "ORDER BY deleted_at DESC, id DESC", (uid,)).fetchall()
+    zone = user_zone(conn, uid)
+    views = _views(conn, rows)
+    for view, row in zip(views, rows):
+        view["deleted_at"] = row["deleted_at"]
+        view["gone_on"] = (local_date(row["deleted_at"], zone) + timedelta(days=TRASH_DAYS)).isoformat()
+    return views
+
+
+def trash_count(conn, uid: int) -> int:
+    return conn.execute("SELECT COUNT(*) AS n FROM items WHERE user_id = ? AND deleted_at IS NOT NULL",
+                        (uid,)).fetchone()["n"]
 
 
 def delete_link(conn, uid: int, link_id: int) -> None:
@@ -582,8 +633,9 @@ def delete_link(conn, uid: int, link_id: int) -> None:
 
 
 def _require_item(conn, uid: int, item_id: int) -> None:
-    if not conn.execute("SELECT 1 FROM items WHERE id = ? AND user_id = ?", (item_id, uid)).fetchone():
-        raise NotFound(f"item {item_id}")
+    if not conn.execute("SELECT 1 FROM items WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                        (item_id, uid)).fetchone():
+        raise NotFound(f"item {item_id}")          # a deleted item can only be restored
 
 
 # ------------------------------------------------------------------- reads
@@ -651,7 +703,8 @@ def _views(conn, rows) -> list[dict]:
 
 
 def item_view(conn, uid: int, item_id: int) -> dict:
-    row = conn.execute("SELECT * FROM items WHERE id = ? AND user_id = ?", (item_id, uid)).fetchone()
+    row = conn.execute("SELECT * FROM items WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                       (item_id, uid)).fetchone()
     if not row:
         raise NotFound(f"item {item_id}")
     return _views(conn, [row])[0]
@@ -659,10 +712,11 @@ def item_view(conn, uid: int, item_id: int) -> dict:
 
 def list_items(conn, uid: int, status: str | None = None) -> list[dict]:
     if status:
-        rows = conn.execute("SELECT * FROM items WHERE user_id = ? AND status = ? "
+        rows = conn.execute("SELECT * FROM items WHERE user_id = ? AND status = ? AND deleted_at IS NULL "
                             "ORDER BY priority DESC, id", (uid, status))
     else:
-        rows = conn.execute("SELECT * FROM items WHERE user_id = ? ORDER BY priority DESC, id", (uid,))
+        rows = conn.execute("SELECT * FROM items WHERE user_id = ? AND deleted_at IS NULL "
+                            "ORDER BY priority DESC, id", (uid,))
     return _views(conn, rows.fetchall())
 
 
@@ -740,7 +794,7 @@ async def refresh(conn, uid: int, extract_fn: ExtractFn, force: bool = False,
     delay = REFRESH_DELAY if delay is None else delay
     query = ("SELECT links.id, links.url, links.price, links.last_checked, links.read_via FROM links "
              "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' "
-             "AND items.user_id = ?")
+             "AND items.deleted_at IS NULL AND items.user_id = ?")
     params = (uid,)
     if item_id is not None:
         _require_item(conn, uid, item_id)
@@ -779,14 +833,16 @@ def phone_refresh_list(conn, uid: int, force: bool = False) -> list[dict]:
     rows = conn.execute(
         "SELECT links.id, links.url, links.price, links.last_checked FROM links "
         "JOIN items ON items.id = links.item_id WHERE items.status != 'purchased' "
-        "AND items.user_id = ? ORDER BY links.id", (uid,)).fetchall()
+        "AND items.deleted_at IS NULL AND items.user_id = ? ORDER BY links.id", (uid,)).fetchall()
     return [{"link_id": r["id"], "url": r["url"]} for r in rows
             if needs_phone(r["url"]) and _needs_check(r, force)]
 
 
 def refresh_link_from_html(conn, uid: int, link_id: int, html: str) -> dict:
     """Record a price check from a page the phone downloaded for this link."""
-    row = conn.execute("SELECT url, price FROM links WHERE id = ? AND user_id = ?", (link_id, uid)).fetchone()
+    row = conn.execute("SELECT links.url, links.price FROM links JOIN items ON items.id = links.item_id "
+                       "WHERE links.id = ? AND links.user_id = ? AND items.deleted_at IS NULL",
+                       (link_id, uid)).fetchone()
     if not row:
         raise NotFound(f"link {link_id}")
     p = extract_from_html(html)(row["url"])           # no fallback: this is the Amazon path

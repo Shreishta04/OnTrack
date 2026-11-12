@@ -251,3 +251,13 @@ export function BoxIcon() {
     </svg>
   )
 }
+
+// A bin: Recently deleted (header and Settings).
+export function TrashIcon() {
+  return (
+    <svg {...common}>
+      <path d="M4.5 6.5h15M9.5 6.5V4.5h5v2M6.5 6.5l.8 13a1 1 0 0 0 1 .9h7.4a1 1 0 0 0 1-.9l.8-13" />
+      <path d="M10 10.5v6M14 10.5v6" />
+    </svg>
+  )
+}
