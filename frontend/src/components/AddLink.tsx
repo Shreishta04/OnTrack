@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { addFromLink } from '../api'
 import type { Item } from '../types'
 import { displayName, isAmazon } from '../format'
+import { friendly } from '../report'
 
 interface AddLinkProps {
   onAdded: (item: Item) => Promise<void>
@@ -31,7 +32,7 @@ export default function AddLink({ onAdded, label = 'Add something' }: AddLinkPro
       )
       await onAdded(item)
     } catch (err) {
-      setMessage({ text: (err as Error).message, tone: 'warn' })
+      setMessage({ text: friendly('Add a link', err), tone: 'warn' })
     } finally {
       setAdding(false)
     }

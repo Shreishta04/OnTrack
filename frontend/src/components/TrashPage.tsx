@@ -6,6 +6,7 @@ import { displayName, shortDate, storeName } from '../format'
 import Price from './Price'
 import Thumb from './Thumb'
 import { BackIcon } from './Icons'
+import { friendly } from '../report'
 
 interface TrashPageProps {
   notes: ReactNode // offline / new version lines, as on the list
@@ -29,7 +30,7 @@ export default function TrashPage({ notes, onBack, onChanged }: TrashPageProps) 
   useEffect(() => {
     getTrash()
       .then(setItems)
-      .catch((e: Error) => setProblem(e.message))
+      .catch((e: Error) => setProblem(friendly('Recently deleted', e)))
   }, [])
 
   async function restore(item: TrashItem) {
@@ -41,7 +42,7 @@ export default function TrashPage({ notes, onBack, onChanged }: TrashPageProps) 
       setMsg(`“${displayName(item)}” is back on ${LIST_NAMES[item.status]}.`)
       await onChanged()
     } catch (e) {
-      setProblem((e as Error).message)
+      setProblem(friendly('Recently deleted', e))
     }
     setBusy(null)
   }
@@ -57,7 +58,7 @@ export default function TrashPage({ notes, onBack, onChanged }: TrashPageProps) 
       setItems([])
       setMsg('Recently deleted is empty.')
     } catch (e) {
-      setProblem((e as Error).message)
+      setProblem(friendly('Recently deleted', e))
     }
     setArmed(false)
     setBusy(null)

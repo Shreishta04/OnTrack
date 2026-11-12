@@ -18,6 +18,7 @@ import {
   BackIcon, BellIcon, BoxIcon, CalendarIcon, ChevronRightIcon, ClockIcon, GlobeIcon, KeyIcon, LockIcon, LogOutIcon,
   MoonIcon, PeopleIcon, PhoneIcon, SunIcon, TagDownIcon, TrashIcon, WalletIcon,
 } from './Icons'
+import { friendly } from '../report'
 
 interface SettingsPageProps {
   me: Me
@@ -234,7 +235,7 @@ function Message({ text }: { text: Msg }) {
 }
 
 type Msg = { text: string; tone: 'muted' | 'warn' } | null
-const failed = (err: unknown): Msg => ({ text: (err as Error).message, tone: 'warn' })
+const failed = (err: unknown): Msg => ({ text: friendly('Settings', err), tone: 'warn' })
 
 // ------------------------------------------------------------ notifications
 

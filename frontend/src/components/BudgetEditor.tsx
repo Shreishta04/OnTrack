@@ -3,6 +3,7 @@ import { setBudget } from '../api'
 import type { PeriodInfo } from '../types'
 import { useMoney } from '../money'
 import { addDays, dayMonth, nextResetAfter, ordinal } from '../format'
+import { friendly } from '../report'
 
 interface BudgetEditorProps {
   period?: PeriodInfo // missing only from an older server: then just the amount
@@ -58,7 +59,7 @@ export default function BudgetEditor({ period, current, onCancel, onSaved, saveL
       await setBudget(amount, canBeOnce ? scope : 'every', day ?? undefined)
       await onSaved()
     } catch (err) {
-      setProblem((err as Error).message)
+      setProblem(friendly('Budget', err))
       setSaving(false)
     }
   }

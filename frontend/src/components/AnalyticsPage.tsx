@@ -6,6 +6,7 @@ import { useEdgeBack } from '../hooks/useEdgeBack'
 import { dayMonth, storeName } from '../format'
 import Price from './Price'
 import { BackIcon } from './Icons'
+import { friendly } from '../report'
 
 interface AnalyticsPageProps {
   me: Me
@@ -24,7 +25,7 @@ export default function AnalyticsPage({ me, summary, notes, onBack }: AnalyticsP
   useEffect(() => {
     getPeriods()
       .then(setPeriods)
-      .catch((e: Error) => setProblem(e.message))
+      .catch((e: Error) => setProblem(friendly('Analytics', e)))
   }, [summary])
 
   const period = summary?.period

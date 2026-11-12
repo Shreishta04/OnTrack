@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { addManual } from '../api'
 import type { Item } from '../types'
 import { useMoney } from '../money'
+import { friendly } from '../report'
 
 interface AddByHandProps {
   onAdded: (item: Item) => Promise<void>
@@ -35,7 +36,7 @@ export default function AddByHand({ onAdded }: AddByHandProps) {
       setMessage({ text: `Added “${item.name}”.`, tone: 'muted' })
       await onAdded(item)
     } catch (err) {
-      setMessage({ text: (err as Error).message, tone: 'warn' })
+      setMessage({ text: friendly('Add by hand', err), tone: 'warn' })
     } finally {
       setAdding(false)
     }
