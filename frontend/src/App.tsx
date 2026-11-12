@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, patchItem, refreshPrices, restoreItem, save, saved,
+  Offline, SIGNED_OUT, addFromLink, deleteItem, getMe, getSummary, getToken, getTrash, patchItem, refreshPrices, restoreItem,
+  save, saved,
 } from './api'
 import type { Item, Me, Status, Summary } from './types'
 import BudgetCard from './components/BudgetCard'
@@ -31,6 +32,7 @@ import SelectionBar, { type BulkAction } from './components/SelectionBar'
 import { usePhone } from './hooks/usePhone'
 import { useNewVersion } from './hooks/useNewVersion'
 import { useNav } from './hooks/useNav'
+import { friendly } from './report'
 
 // An invite or reset link opens the app as /?invite=CODE or /?reset=CODE.
 function linkFromUrl(): { mode: AuthMode; code: string } | null {
@@ -186,6 +188,11 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // The Undo bar after Delete, a move or Mark bought (components/UndoBar.tsx).
   // A newer action replaces it; it goes by itself after a few seconds.
   const [undo, setUndo] = useState<Undo | null>(null)
+  // Does the server keep deleted items? Checked once; until it says yes, a
+  // delete is treated as final and asks first (a server not yet updated
+  // erases instead: that happened once, 12 Nov).
+  const [canRestore, setCanRestore] = useState(false)
+  const restoreChecked = useRef(false)
   const undoCount = useRef(0)
   function offerUndo(text: string, run: () => Promise<unknown>, show: () => void) {
     undoCount.current += 1
@@ -197,7 +204,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     try {
       await u.run()
     } catch (e) {
-      setNote({ text: `Couldn’t undo that: ${(e as Error).message}`, tone: 'warn' })
+      setNote({ text: `Couldn’t undo that: ${friendly('List', e)}`, tone: 'warn' })
     }
     await load()
   }
@@ -209,6 +216,10 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       if (startedAt !== changes.current) return // a newer change is on screen; its own reload follows
       setSummary(fresh)
       save('summary', fresh)
+      if (!restoreChecked.current) {
+        restoreChecked.current = true
+        getTrash().then((t) => setCanRestore(Array.isArray(t))).catch(() => setCanRestore(false))
+      }
       setError(null)
       setOfflineSince(null)
       setUpdating(false)
@@ -220,7 +231,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
         setOfflineSince(copy.at)
         setError(null)
       } else {
-        setError((e as Error).message)
+        setError(friendly('List', e))
       }
     }
   }
@@ -240,7 +251,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
         setTab('planned')
         setNote(addedNote(item))
       })
-      .catch((e: Error) => setNote({ text: e.message, tone: 'warn' }))
+      .catch((e: Error) => setNote({ text: friendly('List', e), tone: 'warn' }))
       .finally(load)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on opening
   }, [])
@@ -294,7 +305,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       await load()
       setNote({ text: refreshNote(result), tone: 'muted' })
     } catch (e) {
-      setNote({ text: (e as Error).message, tone: 'warn' })
+      setNote({ text: friendly('List', e), tone: 'warn' })
     } finally {
       setRefreshing(false)
     }
@@ -354,7 +365,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       : patchItem(item.id, { status: action })
     const after = (undoIt: () => Promise<unknown>) => () => request.catch(() => {}).then(undoIt)
     if (action === 'delete') {
-      offerUndo(`Deleted ${name}`, after(() => restoreItem(item.id)), () => showNow([item.id], { restore: [item] }))
+      if (canRestore) offerUndo(`Deleted ${name}`, after(() => restoreItem(item.id)), () => showNow([item.id], { restore: [item] }))
     } else if (typeof action !== 'object') {
       offerUndo(movedText(name, action), after(() => patchItem(item.id, { status: item.status })),
         () => showNow([item.id], { restore: [item] }))
@@ -362,7 +373,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     try {
       await request
     } catch (e) {
-      setNote({ text: `Couldn’t save that: ${(e as Error).message}`, tone: 'warn' })
+      setNote({ text: `Couldn’t save that: ${friendly('List', e)}`, tone: 'warn' })
     }
     await load() // the real numbers (and the real list, if the server refused)
   }
@@ -452,13 +463,13 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       setPicked(new Set())
       const gone = pickedItems
       const request = Promise.all(gone.map((i) => deleteItem(i.id)))
-      offerUndo(n === 1 ? `Deleted “${displayName(gone[0])}”` : `Deleted ${n} items`,
+      if (canRestore) offerUndo(n === 1 ? `Deleted “${displayName(gone[0])}”` : `Deleted ${n} items`,
         () => request.catch(() => {}).then(() => Promise.all(gone.map((i) => restoreItem(i.id)))),
         () => showNow(gone.map((i) => i.id), { restore: gone }))
       try {
         await request
       } catch (e) {
-        setNote({ text: (e as Error).message, tone: 'warn' })
+        setNote({ text: friendly('List', e), tone: 'warn' })
       }
       await load()
       return
@@ -481,7 +492,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     try {
       await request
     } catch (e) {
-      setNote({ text: (e as Error).message, tone: 'warn' })
+      setNote({ text: friendly('List', e), tone: 'warn' })
     }
     await load()
   }
@@ -678,7 +689,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
             <div key={tab} className={enter}>
               <ItemList items={visible} tab={tab} onAction={handleAction} picked={picked} onPick={togglePick}
                 query={words ? query.trim() : undefined} period={summary?.period} zone={me?.timezone}
-                oldestFirst={sort === 'oldest'} />
+                oldestFirst={sort === 'oldest'} canRestore={canRestore} />
             </div>
           )}
         </main>
@@ -692,6 +703,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           summary={summary}
           onAction={handleBulk}
           onClear={() => setPicked(new Set())}
+          canRestore={canRestore}
         />
       )}
       {undo && !selecting && (

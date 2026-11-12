@@ -2648,3 +2648,9 @@ a.btn-secondary {
   font-size: 13px;
   color: var(--muted);
 }
+.select-trash {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  color: var(--warn);
+}
