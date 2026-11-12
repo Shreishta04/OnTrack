@@ -766,6 +766,27 @@ How each store does, from real pages and real use. Pasting a link = the server d
 | Myntra, AJIO, Nykaa, Flipkart (MRP) | ? | new embedded-data reader, to confirm | home pages ✅, product pages waiting |
 | Tira | ? | ? | waiting for pages |
 
+### 40. The phone app got slow: 6–10 seconds to open, 3 seconds per move
+
+After the move to Railway's Free plan, the home-screen app took 6–10 s to open and about 3 s for every "Move to Later". The laptop felt fine.
+
+**1. 74 database queries for one list.**
+- *Cause:* building the list asked the database one question per item, then one per link, then one per link's price history: **74 queries for 33 items**, each a round trip to Neon, and the number grew with every item. Analytics made 70 more. A move made two trips (save, then reload the whole list).
+- *Fix:* the items, all their links and all their price history are read in **one query each** (`_views` in `services.py`). The list now costs 13 queries whatever its size, Analytics 9, a move 7. A test fails if the one-query-per-item pattern ever comes back (the count must be the same for 5 items and 45).
+
+**2. A new connection to Neon for every request.**
+- *Cause:* each request opened a fresh, encrypted connection, several round trips before the first query.
+- *Fix:* a **connection pool** (`psycopg-pool`): up to 5 open connections are kept and lent to requests. Idle ones close after 4 minutes, before Neon sleeps and would cut them off, and each is checked when borrowed.
+
+**3. The phone waited for the network before showing anything.**
+- *Cause:* the home-screen app fetched the latest page from Vercel every time it opened, then asked the server for the list, then drew it. On mobile data that's two slow waits in a row; a laptop on good Wi-Fi hardly notices.
+- *Fix:* the app opens **from the copy saved on the phone** (the service worker answers at once and fetches a fresh copy in the background; the "new version" notice still checks Vercel itself), and shows **the list saved on the phone** with an *Updating…* line until the server answers.
+
+**4. Waiting for the server after every tap.**
+- *Fix:* moves, Delete and edits **show on screen at once**; the server is told in the background, and the reload that follows brings the budget card in line (or puts things back, with a message, if the server refused). Two quick moves can't flicker: a reload that started before the latest change is ignored.
+
+**What's left:** the first visit after a quiet spell still wakes the server (Railway Free sleeps when idle) and Neon. With the saved list showing meanwhile, that's a wait you no longer stare at.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -1089,8 +1110,8 @@ OnTrack/
 │   ├── extractor.py       page → product details
 │   ├── copy_to_postgres.py  copies ontrack.db into Postgres (or writes a .sql file)
 │   ├── railway.json       Railway: start command and health check
-│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock) plus real saved store pages in tests/pages/: 243, most run on SQLite and Postgres
-│   ├── requirements.txt   exact versions the server runs with (Railway installs these)
+│   ├── tests/             offline tests (fake pages, fake extractor, fake DNS, a fake clock) plus real saved store pages in tests/pages/: 246, most run on SQLite and Postgres
+│   ├── requirements.txt   exact versions the server runs with (Railway installs these), incl. psycopg-pool for reusing database connections
 │   ├── requirements-dev.txt  the same plus pytest and httpx, for running the tests
 │   └── .env.example       settings template (real .env is git-ignored)
 └── frontend/
@@ -1301,3 +1322,5 @@ OnTrack/
 - `feature/easy-setup` (includes that removal): **Set up this phone** for iPhone, Android and computers, a reminder on phones, the Shortcuts reading their key from a file written by **Connect**, and `GET /setup` with the Shortcut links from Railway variables (Challenge 38). 222 tests pass on SQLite and Postgres; 29 new browser checks plus the 228 earlier ones
 - **12 Nov 2026:** rebuilt both Shortcuts to read their key from a file, put their links on Railway, and Set up this phone worked end to end: Connect, share, and Refresh showing *"↓ ₹245 (was ₹252)"* lines. Railway is on Free now (the trial switched the service off until I chose it)
 - `feature/better-readers`, part 1: real store pages as permanent tests (`tests/pages/`, one row each), plain explanations for **out of stock** (Meesho) and **list pages** (VS India), and a store scoreboard (Challenge 39). Then a general reader for the product data shops hide in their pages (Next.js, `__INITIAL_STATE__`, `__PRELOADED_STATE__`, Myntra's `pdpData`), picking the product whose name matches the page title; microdata and Twitter price tags; home pages explained. 243 tests pass on SQLite and Postgres, including five real home pages that must not produce a price
+- Merged as PR #22. Then the phone app felt slow (6–10 s to open, ~3 s per move): `feature/speed` reads the list in 3 queries instead of one per item and link (74 → 13), reuses database connections (a pool), opens from the copy saved on the phone with the saved list showing at once, and shows moves before the server answers (Challenge 40). 246 tests pass; 10 new browser checks with a deliberately slow server, plus the 257 earlier ones
+- Decided: **Railway + Neon stay; Firebase only for notifications (Cloud Messaging)**. Firestore would mean rewriting every query for no gain (OnTrack's data is tables that refer to each other, and budgets need sums), but FCM is free, reaches the iPhone home-screen app and Android, and will serve a Flutter app later
