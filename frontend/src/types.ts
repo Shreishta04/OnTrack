@@ -135,6 +135,7 @@ export interface Person {
   is_admin: boolean
   created_at: string
   items: number
+  removed_at?: string | null // the owner switched this account off (an older server doesn't send it)
 }
 
 // GET /setup: the Shortcuts' iCloud links (set on Railway; null until then)

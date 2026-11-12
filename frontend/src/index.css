@@ -2455,3 +2455,34 @@ a.btn-secondary {
   transform: translateX(20px);
   background: var(--on-accent); /* dark on the cream track in dark mode */
 }
+
+
+/* ============================================================
+   Settings → People: Remove access
+   ============================================================ */
+
+/* name and email first; on a narrow phone the buttons drop under them */
+.acct-list .acct-row {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.acct-list .acct-row-text {
+  flex: 1 1 190px;
+}
+.acct-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  margin-left: auto;
+}
+.acct-row-actions .btn {
+  height: 36px;
+  padding: 0 10px;
+}
+.acct-row.is-removed .acct-row-text {
+  opacity: 0.6; /* still listed, but clearly switched off */
+}
+.tag-warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}

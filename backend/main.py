@@ -600,6 +600,18 @@ def post_user_reset(user_id: int, user=Depends(current_user), conn=Depends(get_d
     return auth.create_invite(conn, user, "Password reset", for_user_id=user_id)
 
 
+@app.post("/users/{user_id}/remove", status_code=204)
+def post_user_remove(user_id: int, user=Depends(current_user), conn=Depends(get_db)):
+    """Owner only: switch someone's account off. Signs them out everywhere; their list is kept."""
+    auth.remove_access(conn, user, user_id)
+
+
+@app.post("/users/{user_id}/restore", status_code=204)
+def post_user_restore(user_id: int, user=Depends(current_user), conn=Depends(get_db)):
+    """Owner only: undo Remove access. They log in with their password again."""
+    auth.restore_access(conn, user, user_id)
+
+
 @app.get("/summary")
 def get_summary(conn=Depends(get_db), user=Depends(current_user)):
     """Budget, discounted total of planned items, what's left, and every item."""

@@ -209,7 +209,7 @@ async def tick(conn, extract_fn, send: Sender, at: datetime | None = None) -> di
     tick from 9 am on their clock (GitHub can run a scheduled job late)."""
     at = at or services._utcnow()
     done = []
-    for user in conn.execute("SELECT id, daily_on FROM users ORDER BY id").fetchall():
+    for user in conn.execute("SELECT id, daily_on FROM users WHERE removed_at IS NULL ORDER BY id").fetchall():
         uid = user["id"]
         local = _local(conn, uid, at)
         today = local.date().isoformat()
