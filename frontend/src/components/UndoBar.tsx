@@ -3,7 +3,8 @@ import { useEffect } from 'react'
 export interface Undo {
   id: number // a new action gets a new id, which restarts the timer
   text: string // "Deleted “Kurta”", "Moved 3 items to Later"
-  run: () => Promise<unknown> // puts things back
+  run: () => Promise<unknown> // puts things back on the server
+  show: () => void // puts things back on screen at once
 }
 
 const UNDO_MS = 6000

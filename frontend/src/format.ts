@@ -120,3 +120,37 @@ export function shortDate(iso: string | null): string {
   if (!iso) return ''
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
+
+// The calendar day a stored time falls on in a time zone: "2026-10-31T19:00:00Z"
+// is already 1 Nov in India. Same rule as the server's local_date().
+export function localDay(iso: string, zone: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('en-CA', { timeZone: zone }) // en-CA writes YYYY-MM-DD
+  } catch {
+    return iso.slice(0, 10) // an unknown zone: the UTC day
+  }
+}
+
+// The budget period a day falls in, worked out from the reset day (the 29th–31st
+// become a short month's last day, like the server). `start` and `end` are
+// both included.
+export function periodOf(day: string, resetDay: number): { start: string; end: string } {
+  const [y, m] = day.split('-').map(Number)
+  const clamp = (year: number, month: number) => {
+    const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate() // month is 0-based here
+    return new Date(Date.UTC(year, month, Math.min(resetDay, last))).toISOString().slice(0, 10)
+  }
+  const thisMonth = clamp(y, m - 1)
+  const start = thisMonth <= day ? thisMonth : m === 1 ? clamp(y - 1, 11) : clamp(y, m - 2)
+  return { start, end: addDays(nextResetAfter(start, resetDay), -1) }
+}
+
+// A period's heading: "5 Oct – 4 Nov", or "October 2026" when periods are
+// calendar months (reset on the 1st).
+export function periodName(p: { start: string; end: string }): string {
+  if (p.start.endsWith('-01') && addDays(p.end, 1).endsWith('-01')) {
+    const [y, m] = p.start.split('-').map(Number)
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  }
+  return `${dayMonth(p.start)} – ${dayMonth(p.end)}`
+}

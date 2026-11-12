@@ -98,7 +98,7 @@ src/
     ├── SelectionBar.tsx   ticked items on any tab: live total, left / over (Wish list, Later), the right buttons per tab, "are you sure?" for 5+ bought, Delete on every tab (always asks)
     ├── ListTools.tsx      the row above the list: Select all / Clear all, and the sort menu
     ├── Tabs.tsx           Wish list · Later · Bought · All, with a pill that measures and follows the active tab
-    ├── ItemList.tsx       the rows for the current tab, or an empty message
+    ├── ItemList.tsx       the rows for the current tab, or an empty message; on Bought, a heading per budget period with its total
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, a price box when it needs one, Edit (name, note, price), actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
