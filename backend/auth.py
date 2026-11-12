@@ -317,6 +317,9 @@ def login(conn, email: str, password: str) -> tuple[dict, str]:
     row = conn.execute("SELECT * FROM users WHERE email = ?", (email.strip().lower(),)).fetchone()
     ok = verify_password(password[:PASSWORD_MAX], row["password_hash"] if row else _DUMMY_HASH)
     if not (row and ok):
+        import events                       # (not the email: the log mustn't list who tried)
+        events.log("accounts", "login failed: wrong email or password", user_id=row["id"] if row else None,
+                   level="warn", known_email=bool(row))
         raise AuthError("Email or password is wrong.")   # never say which: that would confirm the email
     if row["removed_at"]:                   # only said to someone who knows the password
         raise AuthError(SWITCHED_OFF)

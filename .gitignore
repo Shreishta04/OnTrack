@@ -5,3 +5,5 @@ __pycache__/
 .env
 *.db
 ontrack_copy.sql
+# My copy of the server logs (pull_logs.py): never committed
+logs/

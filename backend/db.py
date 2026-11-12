@@ -1,5 +1,5 @@
 """
-Database layer: eleven tables, on SQLite (my laptop) or Postgres (deployed).
+Database layer: twelve tables, on SQLite (my laptop) or Postgres (deployed).
 
 Which one is decided by the DATABASE_URL setting:
   not set                      -> SQLite file (ONTRACK_DB, default ontrack.db)
@@ -64,6 +64,20 @@ CREATE TABLE IF NOT EXISTS push_devices (
     token      TEXT    NOT NULL UNIQUE,
     platform   TEXT,                          -- iphone / android / computer
     created_at TEXT    NOT NULL
+);
+
+-- The logs (events.py): what happened, kept 60 days, pulled to the laptop by
+-- pull_logs.py. No passwords, keys or full links in here.
+CREATE TABLE IF NOT EXISTS events (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    at       TEXT    NOT NULL,                -- UTC, to the millisecond
+    user_id  INTEGER,                         -- whose request it was (NULL: the server itself)
+    area     TEXT    NOT NULL,                -- items / stores / refresh / alerts / accounts / budget / speed / app / errors
+    level    TEXT    NOT NULL,                -- info / warn / error
+    event    TEXT    NOT NULL,                -- what happened, in a few words
+    detail   TEXT,                            -- JSON: ids, counts, reasons, a traceback for errors
+    ref      TEXT,                            -- the code shown to the person ("E-7K2Q"), for errors
+    took_ms  INTEGER                          -- how long it took, when that matters
 );
 
 -- Alerts waiting to be sent, and those sent (kept so nothing goes out twice).
@@ -175,6 +189,7 @@ CREATE INDEX IF NOT EXISTS idx_tokens_user  ON tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_periods_user ON periods(user_id, starts_on);
 CREATE INDEX IF NOT EXISTS idx_push_user    ON push_devices(user_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_wait  ON alerts(user_id, sent_at);
+CREATE INDEX IF NOT EXISTS idx_events_at    ON events(at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_links_user_url ON links(user_id, url);
 """
 
