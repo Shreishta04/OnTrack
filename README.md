@@ -111,6 +111,13 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Graceful failures:** if a store blocks a check, the last known price is kept and the reason is shown
 - **Checked every morning:** at 9 am on each person's own clock, the server re-checks their prices by itself (every store except Amazon, which stays with the phone's Refresh)
 
+**Logs**
+- **Everything important is written down:** every change (add, edit, move, delete, restore), every store page read, every refresh, alert, login and budget change, every error, and every slow request with where the time went. Kept 60 days in the database
+- **One file per area on my laptop:** `python backend\pull_logs.py` copies the new lines into a `logs` folder (`items.log`, `stores.log`, `refresh.log`, `alerts.log`, `accounts.log`, `budget.log`, `speed.log`, `app.log`, `errors.log`, plus `all.log`), in India time, to read in VS Code. Never committed
+- **People never see raw errors:** instead of *"Not found: item 65"* they read *"That item isn't on your list any more. (ref E-7K2Q)"*; the ref is on the matching line in the logs. A crash in the server or in a screen becomes a plain sentence with a ref, and the details go to `errors.log` / `app.log`
+- **The app reports its own problems** (a screen that crashed, an error nobody caught) to `app.log`
+- **No secrets in the logs:** no passwords, keys, emails of failed logins or full product links
+
 **Notifications**
 - **Four alerts**, each with its own switch in **Settings → Notifications**: *Price dropped* ("Kurta: ↓ ₹899 (was ₹1,099)"), *Back in stock*, *Budget resets tomorrow* (on the last day of a period) and *Still on your list* (Mondays: things waiting two weeks or more)
 - **Turn on alerts on this phone** with one tap; the phone asks permission, and that phone starts getting alerts. On an iPhone it works in the app opened from the Home Screen (Apple's rule); in Safari, Settings says so
@@ -859,6 +866,29 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - *Headings by period* on the Bought tab only (decided in a quick mockup: budget periods rather than calendar months, so the headings agree with Spent and Analytics). They follow the sort order, so *Oldest first* puts the oldest period on top.
 - *The card moves at once:* after a move, Mark bought, Delete or Undo, the app works out Planned, Spent and what's left itself, the same way the server does (Spent = bought in this period on your own calendar), and the server's answer confirms it.
 - *Undo appears at once* too (it used to wait for the server), and tapping it waits for the first request to finish, so the two can't reach the server the wrong way round.
+- *Delete fell off the tick bar* on the Wish list tab (four buttons on a 390 px phone): it's now a 🗑 icon next to ✕ at the top of the bar, on every tab.
+- *Items deleted before Railway was updated were erased for good:* the new app had one-tap Delete while the old server still deleted for real. The app now checks once that the server keeps deleted items (`GET /trash`); until it does, Delete asks twice and offers no Undo, as before.
+
+### 45. Logs for everything, and no raw errors on screen
+
+**Symptom:** items I deleted weren't in Recently deleted, and Undo said *"Couldn't undo that: Not found: deleted item 65"*. Railway's log only said `DELETE /items/65 → 204`: that a request happened, not what happened inside it, and it can't be searched or kept.
+
+**What I wanted:** logs for everything, in files per area I can open in VS Code, and nobody ever seeing a message like "item 65".
+
+**The catch:** Railway's disk is wiped on every deploy and every sleep, so a logs folder on the server would vanish. The logs live in the database (an `events` table, kept 60 days) and `pull_logs.py` copies them down.
+
+**How it works:**
+- *One middleware* writes a line for every change, every error and every slow request (over 1 s), in the right area, with who it was, the ids from the address and how long it took. Reads that went fine are left out (there are hundreds).
+- *Services add what happened inside:* "moved to Later", "marked bought", "moved to Recently deleted", whether a store page had a price, how many prices a refresh checked, alerts queued/sent/held, the morning round.
+- *Timings:* a slow `/summary` line says how long each part took (the budget period, the items, the links and history queries), to find what makes it 2.3 s.
+- *Plain sentences with a ref:* "Not found" becomes "That item isn't on your list any more. (ref E-7K2Q)"; a crash becomes "Something went wrong on OnTrack's side… (ref …)" with the full traceback in `errors.log`; bad input says "Something in that didn't look right" and the log says which field. The app shows the server's sentence as it is, and anything else (a proxy's error page, a JavaScript error) as a plain sentence, reported to `app.log`. A screen that crashes shows "Something went wrong · Reload OnTrack" instead of a blank page.
+- *Never slower:* events go on a queue and a background thread writes them a moment later on its own connection.
+- *Pulling without Postgres on the laptop:* `pull_logs.py` uses only Python's own modules and an owner device key over the internet, so Smart App Control has nothing to block.
+
+**Problems found and fixed:**
+- *A test's log lines landing in the next test's database* (the writer thread runs late): in tests the thread is off; each test writes its events itself and the queue is emptied between tests (`conftest.py`).
+- *A traceback cut from the end lost its first line:* long tracebacks are now cut in the middle.
+- *The offline message showed the server's address*: it now says "Can't reach OnTrack right now."
 
 ### Known limits
 
@@ -966,7 +996,8 @@ The web app is only files (HTML, JavaScript, CSS) that Vercel serves; the browse
 - **Server:** Railway deploys **by hand** (I'm the only one changing code, and a mistaken merge shouldn't go live by itself): Railway → service → Settings → Source → update, then Deployments → wait for the new entry to be **Active** → check `/health`. "Redeploy" on an old entry rebuilds the **old** code. For a change to both (like Accounts), deploy Railway straight after merging, since Vercel goes first.
 - **A setting changed** (Railway variable or Vercel environment variable): Railway applies it with a redeploy (it may ask me to click **Deploy**); on Vercel, redeploy the latest deployment so the new value is baked in.
 - **Is it alive?** `https://ontrack-production-8f1d.up.railway.app/health` → `{"ok":true}`. If something fails, Railway → the service → **Deployments → View logs**.
-- **Reading the logs:** search for `store` to see every store page (`result=ok`, `no-price`, `blocked`, `network` or `refused`, with the reason), or for `link=21` to follow one product. `via=upload` means the phone or the extension downloaded the page; `via=server` means the server did.
+- **The full logs** are in the database (Challenge 45): `python backend\pull_logs.py` puts them in the `logs` folder, one file per area. Railway's own log shows the same lines while they're fresh.
+- **Reading Railway's log:** search for `store` to see every store page (`result=ok`, `no-price`, `blocked`, `network` or `refused`, with the reason), or for `link=21` to follow one product. `via=upload` means the phone or the extension downloaded the page; `via=server` means the server did.
 
 **Costs**
 - Vercel and Neon: free plans. Railway: a 30-day trial with $5 of credit, then the free plan with $1 a month. Usage on day one: **$0.0045**. I check **Usage** for a week, and no upgrade or card without deciding first.
@@ -1183,6 +1214,8 @@ All endpoints except `/health` and `/auth/signup|login|reset` need a login token
 | `GET` · `PUT` | `/notifications` | The four alert switches, how many phones get alerts, whether the server can send, and the public Firebase setup; change any switch |
 | `POST` | `/push/devices` · `/push/devices/remove` | Remember (or forget) this phone's Firebase token |
 | `POST` | `/push/test` | Send a test alert now, quiet hours or not |
+| `GET` | `/logs?after_id=&area=` | Owner: the logs, oldest first (what `pull_logs.py` reads) |
+| `POST` | `/logs/app` | The app reports a problem it ran into (`where`, `message`, `detail`); answers a ref code |
 | `POST` | `/cron/tick` | The hourly job (header `X-Cron-Secret`, not a login): each person's 9 am round, then alerts that waited |
 
 ## Project structure
@@ -1196,6 +1229,8 @@ OnTrack/
 │   ├── auth.py            accounts: invites, passwords, tokens, resets
 │   ├── services.py        business logic
 │   ├── replies.py         the sentences the Shortcuts show (?reply=text) instead of JSON
+│   ├── events.py          the logs: one event per change, error or slow request, kept 60 days
+│   ├── pull_logs.py       copies the logs into OnTrack\logs\ (one file per area) on my laptop
 │   ├── notify.py          alerts: what to say, quiet hours, the daily 9 am round
 │   ├── fcm.py             sending one alert to one phone through Firebase
 │   ├── db.py              schema and upgrades of old databases; SQLite or Postgres (DATABASE_URL)
@@ -1426,4 +1461,5 @@ OnTrack/
 - `feature/remove-access` (Challenge 42): **Remove** and **Give access back** in Settings → People and invites. Removing signs the person out everywhere at once, keeps their list, and stops their alerts and morning checks; the owner can't be removed. 10 new tests (289 pass on SQLite and Postgres), 19 new browser checks at 360 and 390 px, light and dark, plus the 281 earlier ones
 - Merged as PR #25 and deployed; the hourly alerts job ran by hand with a green tick (48 s)
 - `feature/recycle-bin` (Challenge 43): Undo bar after Delete, moves and Mark bought; **Recently deleted** for 30 days with Restore and Empty now, from a new 🗑 button in the header and **Settings → Recently deleted**; Delete is one tap now, the tick bar asks from 5. 16 new tests (305 pass on SQLite and Postgres; 14 fail on the old code), 51 new browser checks at 360, 390 and 1280 px, plus the 300 earlier ones
-- Merged as PR #26. On the phone: *Spent ₹0* with a bought item looked like a bug, but it was bought last period. `feature/instant-totals` (Challenge 44): Bought tab headings per budget period with their totals, the budget card updating the moment something moves, and Undo showing without waiting for the server. 19 new browser checks with a deliberately slow server, plus the 351 earlier ones
+- Merged as PR #26. On the phone: *Spent ₹0* with a bought item looked like a bug, but it was bought last period. `feature/instant-totals` (Challenge 44): Bought tab headings per budget period with their totals, the budget card updating the moment something moves, Undo showing without waiting for the server, Delete as a 🗑 in the tick bar, and Delete asking twice with a server that can't restore. 23 new browser checks with a deliberately slow server and an old one, plus the 351 earlier ones
+- `feature/logs` (Challenge 45): logs for everything. An `events` table (60 days), one line per change, error and slow request, plus store reads, refreshes, alerts, the morning round and timings; `pull_logs.py` writes them to a `logs` folder in VS Code, one file per area. Plain sentences with ref codes instead of raw errors, the app reporting its own problems, and a crash screen. 11 new tests (327 pass on SQLite and Postgres; 10 fail on the old code), 7 new browser checks plus the 372 earlier ones, and an end-to-end run of a local server into `pull_logs.py`

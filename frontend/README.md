@@ -70,6 +70,7 @@ src/
 ├── places.ts          countries, currencies, time zones, and first guesses from the device
 ├── types.ts           TypeScript shapes of the data the backend sends
 ├── alerts.ts          "Turn on" alerts for this phone: asks permission, gets the phone's Firebase token (Firebase's code loads only then), sends it to the server
+├── report.ts          problems the app runs into go to the server's app.log; friendly() turns any error into a sentence for the screen
 ├── device.ts          which device (iPhone / Android / computer), installed or not, Android's install offer, the Connect link
 ├── format.ts          store names ("Amazon", "Victoria's Secret"), "Amazon item" for unnamed items, short dates ("5 Oct"), plain-words errors and tips, period dates (the server's reset rule, copied)
 ├── sort.ts            the four sort orders (newest, oldest, price both ways), remembered on this device
@@ -90,6 +91,7 @@ src/
     ├── AnalyticsPage.tsx  /analytics: this period, six periods as bars against the budget, past periods, spend by store
     ├── Price.tsx          every amount, drawn the same way, in the person's currency
     ├── SetupPage.tsx      /setup: Set up this phone (different steps per device)
+    ├── CrashScreen.tsx    if a screen crashes: "Something went wrong · Reload OnTrack" (reported, with a ref) instead of a blank page
     ├── TrashPage.tsx      /trash: Recently deleted (Restore, days left, Empty now)
     ├── UndoBar.tsx        the bar after Delete, a move or Mark bought: what happened + Undo, for 6 seconds
     ├── AddLink.tsx        paste-a-link box (the server downloads the page; on an iPhone, sharing with the Shortcut is better)
@@ -144,7 +146,7 @@ There are five pages, `/` (the list), `/settings`, `/analytics`, `/setup` and `/
 - **Money:** always shown with `<Price amount={…} />`, which draws the person's currency sign small and the digits tabular. For a sign elsewhere (a label, an input), use `useMoney().symbol`. Rupees and yen are whole numbers; other currencies keep their cents when there are some.
 - **Forms:** every form handler starts with `e.preventDefault()`, so the browser doesn't reload the page.
 - **Typed amounts:** forms accept what people actually type ("1,500", "₹1299", "$12.50"): keep only digits and the dot, then check with `Number.isFinite`.
-- **Errors shown to people:** never raw library text. `problemText()` in `format.ts` turns stored errors into a sentence, and `api.ts` does the same for request errors.
+- **Errors shown to people:** never raw text. The server's answers are plain sentences (an `ApiError`, sometimes ending in a ref code); show any caught error with `friendly('Where', err)` from `report.ts`, which also reports anything that isn't the server's sentence to `app.log`. `problemText()` in `format.ts` turns stored link errors into a sentence.
 
 ## Troubleshooting
 

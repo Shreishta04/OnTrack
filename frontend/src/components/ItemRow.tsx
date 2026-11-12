@@ -33,9 +33,11 @@ interface ItemRowProps {
   onAction: (item: Item, action: RowAction) => Promise<void>
   picked?: boolean // undefined: no tick box on this row
   onPick?: () => void
+  canRestore?: boolean // the server keeps deleted items; false: Delete asks twice (it's for good)
 }
 
-export default function ItemRow({ item, showTag, onAction, picked, onPick }: ItemRowProps) {
+export default function ItemRow({ item, showTag, onAction, picked, onPick, canRestore = true }: ItemRowProps) {
+  const [armed, setArmed] = useState(false) // only when a delete can't be undone
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)               // a request is in progress
   const [editing, setEditing] = useState(false)
@@ -202,9 +204,17 @@ export default function ItemRow({ item, showTag, onAction, picked, onPick }: Ite
             <button className="btn btn-quiet" disabled={busy} onClick={() => setEditing(true)}>
               Edit
             </button>
-            {/* one tap: it goes to Recently deleted, and the Undo bar can bring it straight back */}
-            <button className="btn btn-quiet" disabled={busy} onClick={() => run('delete')}>
-              Delete
+            {/* one tap: it goes to Recently deleted, and the Undo bar can bring it straight back.
+                With a server that can't (an older one), the second tap confirms. */}
+            <button className={armed ? 'btn btn-quiet is-armed' : 'btn btn-quiet'} disabled={busy}
+              onClick={() => {
+                if (canRestore || armed) run('delete')
+                else {
+                  setArmed(true)
+                  setTimeout(() => setArmed(false), 3000)
+                }
+              }}>
+              {armed ? 'Tap again to delete' : 'Delete'}
             </button>
           </div>
           )}

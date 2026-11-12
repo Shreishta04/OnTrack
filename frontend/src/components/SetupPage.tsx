@@ -6,6 +6,7 @@ import {
   SHORTCUT_NAME, canInstall, connectLink, device, install, installed, markPhoneSetUp, onInstallOffer, phoneSetUp,
 } from '../device'
 import { AddBoxIcon, BackIcon, CheckIcon, ShareIcon } from './Icons'
+import { friendly } from '../report'
 
 interface SetupPageProps {
   notes: ReactNode
@@ -81,7 +82,7 @@ function IPhoneSteps() {
       setConnected(true)
       window.location.href = connectLink(fresh.token)
     } catch (e) {
-      setProblem((e as Error).message)
+      setProblem(friendly('Set up this phone', e))
     }
     setBusy(false)
   }

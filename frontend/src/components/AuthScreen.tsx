@@ -3,6 +3,7 @@ import { getServer, logIn, resetPassword, saveServer, signUp } from '../api'
 import type { Me } from '../types'
 import { COUNTRIES, CURRENCIES, deviceZone, guessCountry, timeZones } from '../places'
 import { isInstalled } from '../hooks/usePhone'
+import { friendly } from '../report'
 
 // In a phone's browser (not yet opened from the home screen): how to install.
 // On iPhone the home-screen app keeps its own login, separate from Safari.
@@ -69,7 +70,7 @@ export default function AuthScreen({ mode: startMode, code: startCode, onSignedI
             : await resetPassword(code, password)
       onSignedIn(me)
     } catch (err) {
-      setProblem((err as Error).message)
+      setProblem(friendly('Sign in', err))
       setBusy(false)
     }
   }
