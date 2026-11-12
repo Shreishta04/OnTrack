@@ -2613,3 +2613,38 @@ a.btn-secondary {
   background: var(--warn);
   color: var(--surface);
 }
+
+
+/* ============================================================
+   Bought: a heading per budget period
+   ============================================================ */
+
+.period-group {
+  display: contents; /* the rows keep the list's own spacing */
+}
+.period-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 10px 6px 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.period-group:first-child .period-head {
+  margin-top: 0;
+}
+.period-head .num {
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 13px;
+  color: var(--text);
+}
+.period-empty {
+  margin: 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}

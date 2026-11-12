@@ -60,6 +60,7 @@ Most universal wishlists are also built for US/UK stores, so coverage of Indian 
 - **Edit any item:** the name, a note (size, colour, for whom), and a price: what I paid on Bought, my own price while no store gives one. A store's price isn't typed over: it comes from the store and updates on refresh
 - **Type a price** straight on a card that says *Needs a price*, instead of deleting it and adding it again by hand. The store link stays, so a later refresh can still bring in the store's own price
 - **Delete several at once** from the tick bar, on every tab. From 5 items it asks first
+- **Bought, by budget period:** the Bought tab has a quiet heading per period, with what was spent in it (*"This period · 5 Nov – 4 Dec · ₹1,598"*, *"5 Oct – 4 Nov · ₹774"*); with a reset on the 1st they read *"October 2026"*. This period's heading always shows and always equals *Spent* on the budget card
 - **Undo:** after Delete, a move or Mark bought, a bar at the bottom says what happened (*"Deleted “Desk lamp”"*, *"Moved 3 items to Later"*) with **Undo** for 6 seconds. Undo puts each item back on the list it came from
 - **Recently deleted:** Delete is one tap, because nothing is lost: deleted items wait in a trash (the 🗑 button at the top, or **Settings → Recently deleted**) for 30 days, out of every list, total and price check. **Restore** brings one back with its prices and history; **Empty now** clears it (two taps)
 - Items a store wouldn't show yet are called **"Amazon item"** (the store's name) instead of their long link, until a check finds the real name. Store names are spelled properly (*Victoria's Secret*, *TikTok*, *H&M*)
@@ -848,6 +849,17 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - *Two older tests* expected a real delete (the copy script's id gap, links going with their item); they now empty the trash first.
 - *The Undo bar and the + button* both wanted the bottom right on the phone; the bar stops short of it.
 
+### 44. "I bought it, but Spent says ₹0"
+
+**Symptom:** a kurta set bought on 12 Oct sat on the Bought tab, but the budget card said *Spent ₹0*. It looked like a bug. Separately, after *Mark bought* the card's numbers took a few seconds to change.
+
+**Cause:** not a bug: *Spent* only counts the current budget period (5 Nov – 4 Dec), and 12 Oct belongs to the one before. But the Bought tab gave no hint of periods. The slow card was the server: the list moved at once (Challenge 40), the card waited for the server's numbers, which takes seconds when Railway is waking up.
+
+**Fix:**
+- *Headings by period* on the Bought tab only (decided in a quick mockup: budget periods rather than calendar months, so the headings agree with Spent and Analytics). They follow the sort order, so *Oldest first* puts the oldest period on top.
+- *The card moves at once:* after a move, Mark bought, Delete or Undo, the app works out Planned, Spent and what's left itself, the same way the server does (Spent = bought in this period on your own calendar), and the server's answer confirms it.
+- *Undo appears at once* too (it used to wait for the server), and tapping it waits for the first request to finish, so the two can't reach the server the wrong way round.
+
 ### Known limits
 
 - **No currency conversion:** prices are shown in each person's currency as the store gave them. A US account that saves an amazon.in link sees the rupee number with a `$`. Stores do say their currency (`priceCurrency`); warning about a mismatch is a later step.
@@ -867,6 +879,7 @@ After the move to Railway's Free plan, the home-screen app took 6–10 s to open
 - **The morning round depends on GitHub's schedule,** which can run late (rarely, skip an hour). The round then runs at the next tick.
 - **Removing someone keeps their account and list**; there's no "delete account" yet. After *Give access back*, their old Shortcut keys stay dead: they make new ones in *Set up this phone*.
 - **Saving a link that's in Recently deleted starts fresh:** the old copy (and its price history) is deleted for good and a new item is made, instead of restoring it. Restore it first to keep its history.
+- **Bought headings use today's reset day** for past periods too. If the reset day was changed, an old purchase can sit under a slightly different date range than the period saved for it (Analytics uses the saved periods).
 - **No Undo for edits** (a renamed item or a typed price); Undo covers Delete, moves and Mark bought.
 - **Spend by store** groups by the store of an item's first link and uses the price paid. There are no categories yet, so "what kind of things" isn't possible.
 - **"Skip for now" is per device:** on another phone or browser, the setup screen shows once more after logging in.
@@ -1413,3 +1426,4 @@ OnTrack/
 - `feature/remove-access` (Challenge 42): **Remove** and **Give access back** in Settings → People and invites. Removing signs the person out everywhere at once, keeps their list, and stops their alerts and morning checks; the owner can't be removed. 10 new tests (289 pass on SQLite and Postgres), 19 new browser checks at 360 and 390 px, light and dark, plus the 281 earlier ones
 - Merged as PR #25 and deployed; the hourly alerts job ran by hand with a green tick (48 s)
 - `feature/recycle-bin` (Challenge 43): Undo bar after Delete, moves and Mark bought; **Recently deleted** for 30 days with Restore and Empty now, from a new 🗑 button in the header and **Settings → Recently deleted**; Delete is one tap now, the tick bar asks from 5. 16 new tests (305 pass on SQLite and Postgres; 14 fail on the old code), 51 new browser checks at 360, 390 and 1280 px, plus the 300 earlier ones
+- Merged as PR #26. On the phone: *Spent ₹0* with a bought item looked like a bug, but it was bought last period. `feature/instant-totals` (Challenge 44): Bought tab headings per budget period with their totals, the budget card updating the moment something moves, and Undo showing without waiting for the server. 19 new browser checks with a deliberately slow server, plus the 351 earlier ones

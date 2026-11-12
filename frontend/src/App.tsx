@@ -22,7 +22,7 @@ import BudgetSheet from './components/BudgetSheet'
 import AuthScreen, { type AuthMode } from './components/AuthScreen'
 import { MoneyProvider } from './money'
 import { ChartIcon, CloseIcon, GearIcon, PlusIcon, RefreshIcon, SearchIcon, TrashIcon } from './components/Icons'
-import { displayName, refreshNote, storeName } from './format'
+import { displayName, localDay, refreshNote, storeName } from './format'
 import { useTheme } from './hooks/useTheme'
 import AddLink from './components/AddLink'
 import AddByHand from './components/AddByHand'
@@ -187,13 +187,13 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // A newer action replaces it; it goes by itself after a few seconds.
   const [undo, setUndo] = useState<Undo | null>(null)
   const undoCount = useRef(0)
-  function offerUndo(text: string, run: () => Promise<unknown>) {
+  function offerUndo(text: string, run: () => Promise<unknown>, show: () => void) {
     undoCount.current += 1
-    setUndo({ id: undoCount.current, text, run })
+    setUndo({ id: undoCount.current, text, run, show })
   }
   async function runUndo(u: Undo) {
     setUndo(null)
-    changes.current += 1 // a reload already on its way is out of date now
+    u.show() // back on screen at once, budget card included
     try {
       await u.run()
     } catch (e) {
@@ -304,16 +304,26 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
   // the item moves (or goes) at once, and the reload that follows brings the
   // budget card and everything else exactly in line. If the server says no,
   // that reload puts things back the way they really are.
-  function showNow(ids: number[], change: 'delete' | { status: Status } | { edit: ItemEdit }) {
+  // The budget card moves at once too: Spent, Planned and what's left are
+  // worked out here from the changed items, the same way the server does.
+  function showNow(ids: number[], change: 'delete' | { status: Status } | { edit: ItemEdit } | { restore: Item[] }) {
     changes.current += 1
     setSummary((current) => {
       if (!current) return current
       const hit = new Set(ids)
       const items = change === 'delete'
         ? current.items.filter((i) => !hit.has(i.id))
+        : 'restore' in change
+        ? [...current.items.filter((i) => !hit.has(i.id)), ...change.restore]
         : current.items.map((i) => {
             if (!hit.has(i.id)) return i
-            if ('status' in change) return { ...i, status: change.status }
+            if ('status' in change) {
+              const s = change.status
+              if (s === i.status) return i
+              if (s === 'purchased') return { ...i, status: s, purchased_price: i.price, purchased_at: new Date().toISOString() }
+              if (i.status === 'purchased') return { ...i, status: s, purchased_price: null, purchased_at: null }
+              return { ...i, status: s }
+            }
             const e = change.edit
             const own = e.manual_price !== undefined && i.best_link_id == null // no store price: the typed one counts
             return {
@@ -324,7 +334,7 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
               ...(own && { manual_price: e.manual_price ?? null, price: e.manual_price ?? null, needs_price: e.manual_price == null }),
             }
           })
-      return { ...current, items }
+      return withTotals(current, items, me?.timezone)
     })
   }
 
@@ -337,17 +347,20 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
     }
     showNow([item.id], action === 'delete' ? 'delete' : typeof action === 'object' ? action : { status: action })
     const name = `“${displayName(item)}”`
+    // Undo is offered straight away, not when the server answers; tapping it
+    // waits for this request first, so the two can't arrive the wrong way round.
+    const request = action === 'delete' ? deleteItem(item.id)
+      : typeof action === 'object' ? patchItem(item.id, action.edit) // Edit, or a typed price
+      : patchItem(item.id, { status: action })
+    const after = (undoIt: () => Promise<unknown>) => () => request.catch(() => {}).then(undoIt)
+    if (action === 'delete') {
+      offerUndo(`Deleted ${name}`, after(() => restoreItem(item.id)), () => showNow([item.id], { restore: [item] }))
+    } else if (typeof action !== 'object') {
+      offerUndo(movedText(name, action), after(() => patchItem(item.id, { status: item.status })),
+        () => showNow([item.id], { restore: [item] }))
+    }
     try {
-      if (action === 'delete') {
-        await deleteItem(item.id)
-        offerUndo(`Deleted ${name}`, () => restoreItem(item.id))
-      } else if (typeof action === 'object') {
-        await patchItem(item.id, action.edit) // Edit, or a typed price
-      } else {
-        await patchItem(item.id, { status: action })
-        const from = item.status
-        offerUndo(movedText(name, action), () => patchItem(item.id, { status: from }))
-      }
+      await request
     } catch (e) {
       setNote({ text: `Couldn’t save that: ${(e as Error).message}`, tone: 'warn' })
     }
@@ -438,11 +451,12 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       showNow(pickedItems.map((i) => i.id), 'delete')
       setPicked(new Set())
       const gone = pickedItems
+      const request = Promise.all(gone.map((i) => deleteItem(i.id)))
+      offerUndo(n === 1 ? `Deleted “${displayName(gone[0])}”` : `Deleted ${n} items`,
+        () => request.catch(() => {}).then(() => Promise.all(gone.map((i) => restoreItem(i.id)))),
+        () => showNow(gone.map((i) => i.id), { restore: gone }))
       try {
-        await Promise.all(gone.map((i) => deleteItem(i.id)))
-        offerUndo(n === 1 ? `Deleted “${displayName(gone[0])}”` : `Deleted ${n} items`,
-          () => Promise.all(gone.map((i) => restoreItem(i.id))))
-        setPicked(new Set())
+        await request
       } catch (e) {
         setNote({ text: (e as Error).message, tone: 'warn' })
       }
@@ -455,16 +469,17 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       .filter((i) => i.status !== status)
     showNow(targets.map((i) => i.id), { status })
     setPicked(new Set())
+    const n = targets.length
+    const request = Promise.all(targets.map((i) => patchItem(i.id, { status })))
+    if (n === 0) setNote({ text: 'Those are already there, so nothing moved.', tone: 'muted' })
+    else {
+      // each one goes back to the list it came from (on All they can differ)
+      offerUndo(movedText(n === 1 ? `“${displayName(targets[0])}”` : `${n} items`, status),
+        () => request.catch(() => {}).then(() => Promise.all(targets.map((i) => patchItem(i.id, { status: i.status })))),
+        () => showNow(targets.map((i) => i.id), { restore: targets }))
+    }
     try {
-      await Promise.all(targets.map((i) => patchItem(i.id, { status })))
-      const n = targets.length
-      if (n === 0) setNote({ text: 'Those are already there, so nothing moved.', tone: 'muted' })
-      else {
-        // each one goes back to the list it came from (on All they can differ)
-        offerUndo(movedText(n === 1 ? `“${displayName(targets[0])}”` : `${n} items`, status),
-          () => Promise.all(targets.map((i) => patchItem(i.id, { status: i.status }))))
-      }
-      setPicked(new Set())
+      await request
     } catch (e) {
       setNote({ text: (e as Error).message, tone: 'warn' })
     }
@@ -662,7 +677,8 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
           {summary && (
             <div key={tab} className={enter}>
               <ItemList items={visible} tab={tab} onAction={handleAction} picked={picked} onPick={togglePick}
-                query={words ? query.trim() : undefined} />
+                query={words ? query.trim() : undefined} period={summary?.period} zone={me?.timezone}
+                oldestFirst={sort === 'oldest'} />
             </div>
           )}
         </main>
@@ -700,6 +716,30 @@ function WishList({ me, onMe }: { me: Me | null; onMe: (me: Me) => void }) {
       )}
     </div>
   )
+}
+
+// The budget card's numbers for a changed list, worked out like the server's
+// summary: Planned is the wish list with a price; Spent is what was bought in
+// this period (on the person's own calendar); left = budget − spent − planned.
+function withTotals(current: Summary, items: Item[], zone: string | undefined): Summary {
+  const planned = items.filter((i) => i.status === 'planned' && i.price != null)
+  const plannedTotal = planned.reduce((sum, i) => sum + (i.price ?? 0), 0)
+  const p = current.period
+  const spent = !p || !zone ? current.spent_this_month : items
+    .filter((i) => i.status === 'purchased' && i.purchased_at)
+    .filter((i) => {
+      const day = localDay(i.purchased_at!, zone)
+      return day >= p.starts_on && day <= p.ends_on
+    })
+    .reduce((sum, i) => sum + (i.purchased_price ?? 0), 0)
+  return {
+    ...current,
+    items,
+    planned_total: plannedTotal,
+    spent_this_month: spent,
+    remaining: current.budget == null ? null : current.budget - spent - plannedTotal,
+    planned_count: planned.length,
+  }
 }
 
 // The Undo bar's line after a move: "Moved “Kurta” to Later", "Marked 3 items bought".
