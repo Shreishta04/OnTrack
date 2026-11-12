@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 from typing import Callable
 from urllib.parse import urlsplit
 
-from extractor import (NO_PRICE_FROM_BROWSER, NO_PRICE_JAVASCRIPT, Product, clean_url,
+from extractor import (NO_PRICE_FROM_BROWSER, NO_PRICE_JAVASCRIPT, OUT_OF_STOCK, Product, clean_url,
                        extract, html_fetcher, make_fetcher)
 
 ExtractFn = Callable[[str], Product]
@@ -399,6 +399,10 @@ def _record_check(conn: sqlite3.Connection, link_id: int, p: Product, keep_error
     the phone's, so only "when we last tried" is updated."""
     _log_checks(link_id, p)
     if p.ok:
+        import notify          # here, not at the top: notify itself uses this module
+        before = conn.execute("SELECT price, last_error FROM links WHERE id = ?", (link_id,)).fetchone()
+        if before:
+            notify.price_checked(conn, link_id, before, p)    # a drop, or back in stock: queue an alert
         conn.execute(
             """UPDATE links SET title = COALESCE(?, title), price = ?, mrp = ?,
                    image = COALESCE(?, image), method = ?, last_checked = ?, last_error = NULL,

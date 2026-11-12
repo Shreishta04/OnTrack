@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  cancelInvite, changePassword, createInvite, createResetCode, createToken, getServer, linkFor,
-  listInvites, listPeople, listTokens, logOut, revokeToken, saveServer, updateMe,
+  cancelInvite, changePassword, createInvite, createResetCode, createToken, getNotify, getServer, linkFor,
+  listInvites, listPeople, listTokens, logOut, revokeToken, saveServer, sendTestAlert, setNotify, updateMe,
 } from '../api'
-import type { Invite, Me, Person, Summary, TokenInfo } from '../types'
+import type { AlertKind, Invite, Me, NotifySettings, Person, Summary, TokenInfo } from '../types'
+import { alertState, turnOnAlerts, type AlertState } from '../alerts'
 import type { ThemePref } from '../hooks/useTheme'
 import { COUNTRIES, CURRENCIES, timeZones } from '../places'
 import { dayMonth, ordinal, shortDate } from '../format'
@@ -13,8 +14,8 @@ import { useMoney } from '../money'
 import BudgetEditor from './BudgetEditor'
 import Price from './Price'
 import {
-  BackIcon, CalendarIcon, ChevronRightIcon, ClockIcon, GlobeIcon, KeyIcon, LockIcon, LogOutIcon, MoonIcon, PeopleIcon,
-  PhoneIcon, SunIcon, WalletIcon,
+  BackIcon, BellIcon, BoxIcon, CalendarIcon, ChevronRightIcon, ClockIcon, GlobeIcon, KeyIcon, LockIcon, LogOutIcon,
+  MoonIcon, PeopleIcon, PhoneIcon, SunIcon, TagDownIcon, WalletIcon,
 } from './Icons'
 
 interface SettingsPageProps {
@@ -90,6 +91,9 @@ export default function SettingsPage({ me, summary, theme, notes, onBack, onMe, 
         <Choice on={theme.pref === 'system'} onPick={() => theme.setPref('system')} icon={<PhoneIcon />} label="Auto" />
       </div>
       <p className="set-note">Auto follows your phone’s own light or dark setting.</p>
+
+      <h2 className="set-heading">Notifications</h2>
+      <Notifications />
 
       <h2 className="set-heading">Budget</h2>
       <div className="set-group">
@@ -218,6 +222,134 @@ function Message({ text }: { text: Msg }) {
 
 type Msg = { text: string; tone: 'muted' | 'warn' } | null
 const failed = (err: unknown): Msg => ({ text: (err as Error).message, tone: 'warn' })
+
+// ------------------------------------------------------------ notifications
+
+const ALERTS: { kind: AlertKind; icon: ReactNode; label: string; sub: string }[] = [
+  { kind: 'price_drop', icon: <TagDownIcon />, label: 'Price dropped', sub: 'Something on your list got cheaper' },
+  { kind: 'back_in_stock', icon: <BoxIcon />, label: 'Back in stock', sub: 'It was sold out, now it isn’t' },
+  { kind: 'budget_reset', icon: <CalendarIcon />, label: 'Budget resets tomorrow', sub: 'On the last day of each period' },
+  { kind: 'waiting', icon: <ClockIcon />, label: 'Still on your list', sub: 'Mondays: things waiting 2+ weeks' },
+]
+
+const STATE_LINE: Record<AlertState, string> = {
+  on: 'On for this phone',
+  off: 'Off for this phone',
+  blocked: 'Blocked in your phone’s settings',
+  'home-screen': 'Open OnTrack from your Home Screen to turn on',
+  unsupported: 'This browser can’t show alerts',
+}
+
+// Turn alerts on for this phone, choose which ones, and send a test.
+// The switches belong to you (every phone of yours follows them); "on for
+// this phone" is about this phone only.
+function Notifications() {
+  const [data, setData] = useState<NotifySettings | null>(null)
+  const [state, setState] = useState<AlertState>(alertState)
+  const [busy, setBusy] = useState<'on' | 'test' | null>(null)
+  const [msg, setMsg] = useState<Msg>(null)
+
+  useEffect(() => {
+    getNotify()
+      .then((r) => r?.settings && setData(r)) // (an older server has no /notifications)
+      .catch((err) => setMsg(failed(err)))
+  }, [])
+
+  async function turnOn() {
+    if (!data?.web) return
+    setBusy('on')
+    setMsg(null)
+    try {
+      const now = await turnOnAlerts(data.web) // asks the phone first, straight from this tap
+      setState(now)
+      if (now === 'on') {
+        setData({ ...data, devices: Math.max(data.devices, 1) })
+        setMsg({ text: 'Alerts are on. Try “Send a test”.', tone: 'muted' })
+      }
+    } catch (err) {
+      setMsg(failed(err))
+    }
+    setBusy(null)
+  }
+
+  async function flip(kind: AlertKind) {
+    if (!data) return
+    const before = data
+    const on = !data.settings[kind]
+    setData({ ...data, settings: { ...data.settings, [kind]: on } }) // at once; put back if it fails
+    try {
+      await setNotify({ [kind]: on })
+    } catch (err) {
+      setData(before)
+      setMsg(failed(err))
+    }
+  }
+
+  async function test() {
+    setBusy('test')
+    setMsg(null)
+    try {
+      const r = await sendTestAlert()
+      setMsg(r.devices === 0 ? { text: 'No phone has alerts on yet. Turn them on first.', tone: 'warn' }
+        : r.sent > 0 ? { text: `Sent to ${r.sent === 1 ? 'your phone' : `${r.sent} phones`}. It should arrive in a few seconds.`, tone: 'muted' }
+          : { text: 'Couldn’t reach your phone. Turn alerts on again on it.', tone: 'warn' })
+    } catch (err) {
+      setMsg(failed(err))
+    }
+    setBusy(null)
+  }
+
+  const ready = data?.web && data.configured // the server is set up to send
+  return (
+    <>
+      <div className="set-group">
+        <div className="set-row is-static">
+          <span className="set-icon"><BellIcon /></span>
+          <span className="set-label">
+            Alerts
+            <span className="set-sub">{data && !ready ? 'Not set up on the server yet' : STATE_LINE[state]}</span>
+          </span>
+          {state === 'on' ? (
+            <span className="pill pill-good">On</span>
+          ) : state === 'off' && ready ? (
+            <button className="btn btn-primary btn-row" onClick={turnOn} disabled={busy !== null}>
+              {busy === 'on' ? 'Turning on…' : 'Turn on'}
+            </button>
+          ) : null}
+        </div>
+        {ALERTS.map((a) => (
+          <div className="set-row is-static" key={a.kind}>
+            <span className="set-icon">{a.icon}</span>
+            <span className="set-label">
+              {a.label}
+              <span className="set-sub">{a.sub}</span>
+            </span>
+            <Switch label={a.label} on={data?.settings[a.kind] ?? true} disabled={!data} onFlip={() => flip(a.kind)} />
+          </div>
+        ))}
+      </div>
+      <p className="set-note">
+        Prices are checked every morning. Nothing arrives between 10 pm and 8 am: it waits until morning.
+        {state === 'blocked' && ' To allow alerts again: your phone’s Settings → Notifications → OnTrack.'}
+      </p>
+      {(state === 'on' || (data?.devices ?? 0) > 0) && ready && (
+        <button className="btn btn-secondary set-test" onClick={test} disabled={busy !== null}>
+          {busy === 'test' ? 'Sending…' : 'Send a test'}
+        </button>
+      )}
+      <Message text={msg} />
+    </>
+  )
+}
+
+function Switch({ label, on, disabled, onFlip }: { label: string; on: boolean; disabled?: boolean; onFlip: () => void }) {
+  return (
+    <button className={on ? 'switch is-on' : 'switch'} role="switch" aria-checked={on} aria-label={label}
+      disabled={disabled} onClick={onFlip}>
+      <span className="switch-knob" />
+    </button>
+  )
+}
 
 // ------------------------------------------------------------------ profile
 

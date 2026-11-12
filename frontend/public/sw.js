@@ -18,6 +18,10 @@
 //   /assets/…         saved copy first (Vite gives every build new file
 //                     names, so a saved file never goes out of date)
 //   anything else     straight to the network
+//
+// It also shows OnTrack's alerts (price drops, reminders): the server sends
+// them through Firebase as a small message, and the "push" handler at the
+// bottom turns it into a notification, even when the app is closed.
 
 const CACHE = 'ontrack-app-v1'
 // (same name as before on purpose: the copy already saved on phones keeps working)
@@ -98,4 +102,44 @@ self.addEventListener('fetch', (event) => {
       })(),
     )
   }
+})
+
+// ------------------------------------------------------------------ alerts
+
+// A message from the server (through Firebase): { data: { title, body, url, tag } }.
+// Every push must show a notification (iPhones turn alerts off otherwise).
+self.addEventListener('push', (event) => {
+  let message = {}
+  try {
+    const payload = event.data ? event.data.json() : {}
+    message = payload.data || payload.notification || payload
+  } catch {
+    message = { body: event.data ? event.data.text() : '' }
+  }
+  event.waitUntil(
+    self.registration.showNotification(message.title || 'OnTrack', {
+      body: message.body || '',
+      icon: '/icon-192.png',
+      badge: '/favicon-64.png',
+      tag: message.tag || undefined, // the same news replaces itself instead of stacking up
+      data: { url: message.url || '/' },
+    }),
+  )
+})
+
+// Tapping an alert: back to OnTrack if it's open, otherwise open it.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const url = new URL(event.notification.data?.url || '/', self.location.origin).href
+  event.waitUntil(
+    (async () => {
+      const open = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      const app = open.find((c) => new URL(c.url).origin === self.location.origin)
+      if (app) {
+        await app.focus()
+        return
+      }
+      await self.clients.openWindow(url)
+    })(),
+  )
 })

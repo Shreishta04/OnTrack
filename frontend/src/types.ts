@@ -142,3 +142,19 @@ export interface SetupLinks {
   add_shortcut_url: string | null
   refresh_shortcut_url: string | null
 }
+
+// Settings → Notifications
+export type AlertKind = 'price_drop' | 'budget_reset' | 'waiting' | 'back_in_stock'
+
+export interface NotifySettings {
+  settings: Record<AlertKind, boolean>
+  devices: number // phones that get alerts
+  configured: boolean // the server can send (Firebase set up on Railway)
+  web: { config: Record<string, string>; vapid_key: string } | null // what a phone needs to sign up
+}
+
+export interface TestResult {
+  sent: number
+  failed: number
+  devices: number
+}

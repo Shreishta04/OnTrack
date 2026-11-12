@@ -69,6 +69,7 @@ src/
 ├── money.tsx          the person's currency: symbol and digit grouping, shared through a React context
 ├── places.ts          countries, currencies, time zones, and first guesses from the device
 ├── types.ts           TypeScript shapes of the data the backend sends
+├── alerts.ts          "Turn on" alerts for this phone: asks permission, gets the phone's Firebase token (Firebase's code loads only then), sends it to the server
 ├── device.ts          which device (iPhone / Android / computer), installed or not, Android's install offer, the Connect link
 ├── format.ts          store names ("Amazon", "Victoria's Secret"), "Amazon item" for unnamed items, short dates ("5 Oct"), plain-words errors and tips, period dates (the server's reset rule, copied)
 ├── sort.ts            the four sort orders (newest, oldest, price both ways), remembered on this device
@@ -99,7 +100,7 @@ src/
     ├── ItemRow.tsx        one expandable row: details, why it's stuck, a price box when it needs one, Edit (name, note, price), actions
     ├── Thumb.tsx          product photo, or the name's first letter
     ├── AuthScreen.tsx     log in · sign up with an invite · new password from a reset link
-    ├── SettingsPage.tsx   /settings: profile, appearance, budget and reset day, region, password, device keys, people (owner), log out
+    ├── SettingsPage.tsx   /settings: profile, appearance, notifications (Turn on, four switches, Send a test), budget and reset day, region, password, device keys, people (owner), log out
     └── Icons.tsx          small line icons (search, gear, back, refresh, sun, moon, close, chevron, …)
 ```
 
@@ -126,7 +127,8 @@ There are four pages, `/` (the list), `/settings`, `/analytics` and `/setup`, pl
 ## Phone app (PWA)
 
 - `public/manifest.webmanifest`: name, icons, `display: standalone` (full screen from the home screen), and `share_target`, which puts the installed app in Android's share menu (shares arrive as `/?title=&text=&url=`, read in `App.tsx`).
-- `public/sw.js`: the service worker. The page network-first, `/assets/…` from its saved copy, everything else (including the server, fonts) untouched. Registered only in the built app, so `npm run dev` never serves stale files. To try it locally: `npm run build` then `npm run preview` (http://localhost:4173, add it to `ONTRACK_CORS_ORIGINS`).
+- `public/sw.js`: the service worker. The page from its saved copy first (a fresh one fetched in the background), `/assets/…` from its saved copy, everything else (including the server, fonts) untouched. Registered only in the built app, so `npm run dev` never serves stale files. To try it locally: `npm run build` then `npm run preview` (http://localhost:4173, add it to `ONTRACK_CORS_ORIGINS`).
+- Notifications: `sw.js` also has a `push` handler (the server's message, through Firebase, becomes a notification; every push shows one, or iPhones stop delivering) and `notificationclick` (focus OnTrack, or open it). `alerts.ts` hands Firebase **our** service worker, so there's no separate `firebase-messaging-sw.js`. On an iPhone this only works in the Home Screen app (iOS 16.4+), and permission is asked straight from the *Turn on* tap. The Firebase setup (public) comes from the server's `GET /notifications`, so a new Firebase project needs no rebuild.
 - The offline list is saved by `api.ts` (`save` / `saved`), not the service worker, and deleted on log out.
 - Phone layout below 860px wide (`usePhone`), the same width at which the two columns stack.
 - `index.css` uses `env(safe-area-inset-…)` with `viewport-fit=cover`, so nothing hides under the notch or home bar. Text boxes are 16px: smaller makes iPhone Safari zoom on every tap.

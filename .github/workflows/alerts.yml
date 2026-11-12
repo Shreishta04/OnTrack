@@ -1,0 +1,38 @@
+# Every hour, wake the server and ask it for its alerts round (/cron/tick):
+#   - at 9 am on each person's clock: check prices, add the reminders
+#     (budget resets tomorrow, still on your list)
+#   - every time: send alerts that waited overnight (nothing goes out 10 pm–8 am)
+#
+# Railway's Free plan has no scheduler of its own, and GitHub runs this for free.
+# GitHub sometimes starts scheduled jobs late; the server copes (the 9 am round
+# runs at the first tick after 9, once a day).
+#
+# Needs two repository secrets (Settings → Secrets and variables → Actions):
+#   ONTRACK_SERVER       https://<your Railway address>  (no slash at the end)
+#   ONTRACK_CRON_SECRET  the same long random text as the Railway variable
+
+name: alerts
+
+on:
+  schedule:
+    - cron: "5 * * * *"      # five past every hour (on the hour, GitHub is busiest)
+  workflow_dispatch:          # and a "Run workflow" button, for trying it by hand
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Ask the server for its alerts round
+        env:
+          SERVER: ${{ secrets.ONTRACK_SERVER }}
+          SECRET: ${{ secrets.ONTRACK_CRON_SECRET }}
+        run: |
+          if [ -z "$SERVER" ] || [ -z "$SECRET" ]; then
+            echo "ONTRACK_SERVER or ONTRACK_CRON_SECRET isn't set in this repository's secrets: nothing to do."
+            exit 0
+          fi
+          # --retry: the first try may only wake the server up (Serverless sleep)
+          curl --fail-with-body --silent --show-error --max-time 600 \
+               --retry 3 --retry-delay 20 --retry-all-errors \
+               -X POST -H "X-Cron-Secret: $SECRET" "$SERVER/cron/tick"

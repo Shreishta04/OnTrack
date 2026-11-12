@@ -42,8 +42,8 @@ from dotenv import load_dotenv
 import db
 
 # Parents before children: a link needs its item to exist first.
-TABLES = ["users", "tokens", "invites", "settings", "items", "links", "price_history", "status_changes", "periods"]
-WITH_IDS = ["users", "tokens", "invites", "items", "links", "price_history", "status_changes", "periods"]  # settings has no id
+TABLES = ["users", "tokens", "invites", "settings", "items", "links", "price_history", "status_changes", "periods", "push_devices", "alerts"]
+WITH_IDS = ["users", "tokens", "invites", "items", "links", "price_history", "status_changes", "periods", "push_devices", "alerts"]  # settings has no id
 
 
 _columns = db.columns     # an ontrack.db from before Accounts has no users table: [] columns

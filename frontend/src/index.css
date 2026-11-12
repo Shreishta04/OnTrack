@@ -2400,3 +2400,58 @@ a.btn-secondary {
 .step + .step {
   margin-top: 6px;
 }
+
+
+/* ============================================================
+   Settings → Notifications
+   ============================================================ */
+
+/* a row that holds its own control (a switch, a button) instead of opening */
+.set-row.is-static {
+  cursor: default;
+}
+.btn-row {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.set-test {
+  margin-top: 12px;
+  width: 100%;
+}
+
+/* an on/off switch, iPhone style: the knob slides right and the track fills */
+.switch {
+  position: relative;
+  width: 51px;
+  height: 31px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--track);
+  cursor: pointer;
+  transition: background-color 0.25s ease;
+}
+.switch.is-on {
+  background: var(--accent);
+}
+.switch:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 0.18);
+  transition: transform 0.25s var(--ease);
+}
+.switch.is-on .switch-knob {
+  transform: translateX(20px);
+  background: var(--on-accent); /* dark on the cream track in dark mode */
+}

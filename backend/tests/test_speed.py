@@ -58,6 +58,11 @@ def test_connections_are_reused(client):
     first = db.connect()
     if not isinstance(first, db.PgConnection):
         pytest.skip("Postgres only")
+    # Start from a pool with one connection in it: earlier tests (alerts sent
+    # after the answer, on a second connection) can leave two, taken in turn.
+    first.close()
+    db.close_pools()
+    first = db.connect()
     raw = first.raw
     first.close()
     again = db.connect()
