@@ -3,7 +3,7 @@ import type { Item, Status, Summary } from '../types'
 import type { TabId } from './Tabs'
 import { shownPrice } from '../sort'
 import Price from './Price'
-import { CloseIcon } from './Icons'
+import { CloseIcon, TrashIcon } from './Icons'
 
 // What a button in the bar asks for: move the ticked items, "park the
 // rest" (move every UNticked wish-list item to Later), or delete the ticked ones.
@@ -20,6 +20,7 @@ interface SelectionBarProps {
   summary: Summary
   onAction: (action: BulkAction) => Promise<void>
   onClear: () => void
+  canRestore: boolean // the server keeps deleted items (Recently deleted); false: a delete is for good
 }
 
 // The "what if?" bar. It appears while something is ticked, adds up the
@@ -35,7 +36,7 @@ interface SelectionBarProps {
 //              would count them twice. The total is what you paid.
 //   All        nothing: a mix of bought and not-yet-bought has no honest
 //              "left" figure.
-export default function SelectionBar({ tab, picked, allPicked, summary, onAction, onClear }: SelectionBarProps) {
+export default function SelectionBar({ tab, picked, allPicked, summary, onAction, onClear, canRestore }: SelectionBarProps) {
   const [busy, setBusy] = useState(false)
   // The number of items "Mark bought" was armed for. If the ticks change,
   // the number no longer matches and the question quietly goes away.
@@ -97,6 +98,12 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
             </>
           )}
         </div>
+        {/* Delete sits up here as an icon, so it never falls off a narrow screen.
+            It asks first from 5 items, or always if the server can't take it back. */}
+        <button className="icon-btn select-trash" aria-label="Delete selected" title="Delete" disabled={busy}
+          onClick={() => (picked.length >= (canRestore ? CONFIRM_FROM : 1) ? setDeleteFor(picked.length) : run('delete'))}>
+          <TrashIcon />
+        </button>
         <button className="icon-btn select-clear" aria-label="Clear selection" onClick={onClear} disabled={busy}>
           <CloseIcon />
         </button>
@@ -108,7 +115,9 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
       {confirmingDelete ? (
         <div className="select-confirm">
           <p>
-            Delete {picked.length} items? They’ll be in Recently deleted for 30 days.
+            {canRestore
+              ? `Delete ${picked.length} items? They’ll be in Recently deleted for 30 days.`
+              : `Delete ${picked.length === 1 ? 'this item' : `${picked.length} items`}? This can’t be undone.`}
           </p>
           <div className="select-actions">
             <button className="btn btn-secondary" disabled={busy} onClick={() => setDeleteFor(null)}>
@@ -173,11 +182,6 @@ export default function SelectionBar({ tab, picked, allPicked, summary, onAction
               </button>
             </>
           )}
-          {/* on every tab; asks first for 5 or more */}
-          <button className="btn btn-quiet select-delete" disabled={busy}
-            onClick={() => (picked.length >= CONFIRM_FROM ? setDeleteFor(picked.length) : run('delete'))}>
-            Delete
-          </button>
         </div>
       )}
     </section>

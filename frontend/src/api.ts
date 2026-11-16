@@ -74,6 +74,8 @@ function forgetSaved() {
 // Thrown when the server can't be reached at all (no signal, server asleep),
 // as opposed to the server answering with an error.
 export class Offline extends Error {}
+// The server said no, in a plain sentence meant for the person (it may end in a ref code).
+export class ApiError extends Error {}
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const server = getServer()
@@ -84,17 +86,21 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       headers: { 'X-API-Key': getToken() ?? '', 'Content-Type': 'application/json', ...options.headers },
     })
   } catch {
-    throw new Offline(`Can't reach the server at ${server}. Check your connection and try again.`)
+    throw new Offline('Can’t reach OnTrack right now. Check your connection and try again.')
   }
 
   if (response.status === 204) return undefined as T // e.g. DELETE: nothing to read
   const body = await response.json().catch(() => null)
   if (!response.ok) {
-    const detail = body && typeof body.detail === 'string' ? body.detail : `Request failed (${response.status})`
+    // The server's answers are plain sentences (with a ref code for problems). Anything
+    // else (a proxy's error page, a server too old to say) gets a sentence too.
+    const detail = body && typeof body.detail === 'string' ? body.detail
+      : response.status >= 500 ? 'OnTrack’s server ran into a problem. Try again in a moment.'
+      : 'OnTrack couldn’t do that just now. Try again in a moment.'
     // 401 on a normal request: this login has ended (logged out elsewhere,
     // password changed). On /auth/… it just means a wrong password.
     if (response.status === 401 && !path.startsWith('/auth/')) signOutLocally()
-    throw new Error(detail)
+    throw new ApiError(detail)
   }
   return body as T
 }

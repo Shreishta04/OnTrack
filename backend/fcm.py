@@ -91,7 +91,8 @@ def send(token: str, message: dict) -> str:
     try:
         r = _authorized().post(url, json=body, timeout=15)
     except Exception as exc:
-        log.warning("push     failed: %s", type(exc).__name__)
+        import events
+        events.log("alerts", "couldn't reach Firebase", level="warn", error=type(exc).__name__)
         return "error"
     if r.status_code == 200:
         return "ok"
@@ -100,5 +101,6 @@ def send(token: str, message: dict) -> str:
         return "gone"
     if r.status_code == 400 and "registration token" in text.lower():
         return "gone"
-    log.warning("push     FCM answered %s: %s", r.status_code, text)
+    import events
+    events.log("alerts", f"Firebase refused an alert ({r.status_code})", level="warn", answer=text)
     return "error"

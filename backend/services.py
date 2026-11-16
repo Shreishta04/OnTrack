@@ -25,6 +25,8 @@ import sqlite3
 import os
 from dataclasses import replace
 import calendar
+
+import events
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Callable
@@ -170,7 +172,11 @@ def _log_checks(link_id: int, p: Product) -> None:
             parts.append(f'reason="{a["reason"]}"')
         if a["took"] is not None:
             parts.append(f"took={a['took']:.1f}s")
-        log.info("store    %s", "  ".join(parts))
+        log.info("store    %s", "  ".join(parts))               # Railway's log, as before
+        # stores.log: the host, never the full link
+        events.log("stores", f"{a['host']} · {a['result']}", level="info" if a["result"] == "ok" else "warn",
+                   took=a["took"], link=link_id, via=a["via"],
+                   price=a["price"], reason=a["reason"] if a["result"] != "ok" else None, printed=False)
 
 
 def _server_extract(url: str) -> Product:
@@ -299,6 +305,8 @@ def current_period(conn, uid: int) -> dict:
         conn.execute("INSERT INTO periods (user_id, starts_on, ends_on, budget, custom, created_at) "
                      "VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (user_id, starts_on) DO NOTHING",
                      (uid, start.isoformat(), end.isoformat(), me["budget"], now()))
+        events.log("budget", "new budget period", user_id=uid, starts_on=start.isoformat(),
+                   ends_on=end.isoformat(), budget=me["budget"])
         if end >= today:
             break
         start = end + timedelta(days=1)
@@ -311,6 +319,7 @@ def set_budget(conn, uid: int, amount: float, scope: str = "every") -> None:
     """scope "every": the new default, and this period's budget too.
     scope "once": this period only; the next one starts with the default."""
     period = current_period(conn, uid)
+    events.note(event="budget set", amount=amount, scope=scope)
     if scope == "every":
         conn.execute("UPDATE users SET budget = ? WHERE id = ?", (amount, uid))
     if period["id"] is not None:
@@ -324,6 +333,7 @@ def set_reset_day(conn, uid: int, day: int) -> None:
     ends the day before it. (Today itself counts as gone: picking today's
     date doesn't restart the budget halfway through the day.)"""
     period = current_period(conn, uid)          # saved with the old day first
+    events.note(reset_day=day)
     conn.execute("UPDATE users SET reset_day = ? WHERE id = ?", (day, uid))
     if period["id"] is not None:
         today = today_in(user_zone(conn, uid))
@@ -451,6 +461,8 @@ def _known_link(conn: sqlite3.Connection, uid: int, url: str) -> sqlite3.Row | N
     if row and row["deleted_at"]:
         # Saved again while it's in Recently deleted: the old copy goes for
         # good and this one starts fresh (otherwise it could never be re-added).
+        events.log("items", "saved again while in Recently deleted: old copy deleted for good",
+                   user_id=uid, old_item=row["item_id"])
         conn.execute("DELETE FROM items WHERE id = ?", (row["item_id"],))
         conn.commit()
         return None
@@ -503,9 +515,11 @@ def create_item_from_link(conn, uid: int, url: str, extract_fn: ExtractFn,
     the database for the whole download, and every other change would fail.
     """
     final_url, p, stuck = _fetch_link(conn, uid, url, extract_fn)
+    events.note(store=urlsplit(final_url).netloc, price_found=p.ok, reason=_reason(p.error) if not p.ok else None)
     if stuck:
         item_id = _fill_stuck_link(conn, stuck, p)
         conn.commit()
+        events.note(event="filled in a saved link that had no price", item=item_id)
         return item_id
 
     item_id = conn.execute(
@@ -514,6 +528,7 @@ def create_item_from_link(conn, uid: int, url: str, extract_fn: ExtractFn,
     _log_status(conn, item_id, None, "planned")  # initial status
     _save_link(conn, uid, item_id, final_url, p)
     conn.commit()
+    events.note(event="item added", item=item_id)
     return item_id
 
 
@@ -549,6 +564,7 @@ def create_manual_item(conn, uid: int, name: str, price: float | None, note: str
         conn.execute("INSERT INTO links (item_id, user_id, url, created_at) VALUES (?, ?, ?, ?)",
                      (item_id, uid, link_url, now()))
     conn.commit()
+    events.note(event="item added by hand", item=item_id, store=urlsplit(link_url).netloc if link_url else None)
     return item_id
 
 
@@ -568,6 +584,10 @@ def update_item(conn, uid: int, item_id: int, **fields) -> None:
         changes["purchased_price"] = None
         changes["purchased_at"] = None
 
+    moved = new_status and new_status != old_status
+    events.note(event={"planned": "moved to the wish list", "later": "moved to Later",
+                       "purchased": "marked bought"}.get(new_status) if moved else "edited",
+                fields=sorted(changes), moved=f"{old_status} → {new_status}" if moved else None)
     if changes:
         sets = ", ".join(f"{k} = ?" for k in changes)
         conn.execute(f"UPDATE items SET {sets} WHERE id = ?", (*changes.values(), item_id))
@@ -586,6 +606,7 @@ def delete_item(conn, uid: int, item_id: int) -> None:
     _require_item(conn, uid, item_id)
     conn.execute("UPDATE items SET deleted_at = ? WHERE id = ?", (now(), item_id))
     conn.commit()
+    events.note(event="moved to Recently deleted")
 
 
 def restore_item(conn, uid: int, item_id: int) -> dict:
@@ -593,6 +614,7 @@ def restore_item(conn, uid: int, item_id: int) -> dict:
                         "AND deleted_at IS NOT NULL", (item_id, uid)).rowcount:
         raise NotFound(f"deleted item {item_id}")
     conn.commit()
+    events.note(event="restored from Recently deleted")
     return item_view(conn, uid, item_id)
 
 
@@ -605,6 +627,9 @@ def purge_trash(conn, uid: int, everything: bool = False) -> int:
         cutoff = (_utcnow() - timedelta(days=TRASH_DAYS)).isoformat(timespec="seconds")
         cur = conn.execute("DELETE FROM items WHERE user_id = ? AND deleted_at < ?", (uid, cutoff))
     conn.commit()
+    if cur.rowcount:
+        events.log("items", "deleted for good" + (" (Empty now)" if everything else " (30 days in Recently deleted)"),
+                   user_id=uid, count=cur.rowcount)
     return cur.rowcount
 
 
@@ -688,14 +713,16 @@ def _views(conn, rows) -> list[dict]:
     if not rows:
         return []
     marks = ",".join("?" * len(rows))
-    links = conn.execute(f"SELECT * FROM links WHERE item_id IN ({marks}) ORDER BY id",
-                         [r["id"] for r in rows]).fetchall()
+    with events.span("links query"):
+        links = conn.execute(f"SELECT * FROM links WHERE item_id IN ({marks}) ORDER BY id",
+                             [r["id"] for r in rows]).fetchall()
     history: dict[int, list] = {}
     if links:
         marks = ",".join("?" * len(links))
-        for h in conn.execute(f"SELECT link_id, price FROM price_history WHERE link_id IN ({marks}) "
-                              "ORDER BY checked_at, id", [l["id"] for l in links]):
-            history.setdefault(h["link_id"], []).append(h["price"])
+        with events.span("history query"):
+            for h in conn.execute(f"SELECT link_id, price FROM price_history WHERE link_id IN ({marks}) "
+                                  "ORDER BY checked_at, id", [l["id"] for l in links]):
+                history.setdefault(h["link_id"], []).append(h["price"])
     by_item: dict[int, list] = {}
     for l in links:
         by_item.setdefault(l["item_id"], []).append(_link_view(l, history.get(l["id"], [])))
@@ -734,9 +761,11 @@ def price_history(conn, uid: int, item_id: int) -> list[dict]:
 
 def summary(conn, uid: int) -> dict:
     """The numbers at the top of the app, for the current budget period."""
-    period = current_period(conn, uid)
+    with events.span("period"):
+        period = current_period(conn, uid)
     budget = period["budget"]
-    items = list_items(conn, uid)
+    with events.span("items"):
+        items = list_items(conn, uid)
     zone = user_zone(conn, uid)
     spent = _spent_between(items, period["starts_on"], period["ends_on"], zone)
     planned = [i for i in items if i["status"] == "planned" and i["price"] is not None]
@@ -823,6 +852,9 @@ async def refresh(conn, uid: int, extract_fn: ExtractFn, force: bool = False,
         elif link["price"] is not None and p.price != link["price"]:
             changes.append({"link_id": link["id"], "old_price": link["price"], "new_price": p.price})
     conn.commit()
+    events.log("refresh", "prices checked by the server" + (f" (item {item_id})" if item_id else ""), user_id=uid,
+               checked=len(due), changed=len(changes), failed=len(failed),
+               skipped_recent=len(links) - len(due), left_to_the_phone=len(phone_only))
     return {"checked": len(due), "skipped_recent": len(links) - len(due),
             "phone_only": len(phone_only), "changed": changes, "failed": failed}
 
@@ -848,5 +880,7 @@ def refresh_link_from_html(conn, uid: int, link_id: int, html: str) -> dict:
     p = extract_from_html(html)(row["url"])           # no fallback: this is the Amazon path
     _record_check(conn, link_id, p)
     conn.commit()
+    events.note(event="price checked by the phone", ok=p.ok, old_price=row["price"], new_price=p.price,
+                reason=_reason(p.error) if not p.ok else None)
     return {"link_id": link_id, "ok": p.ok, "old_price": row["price"],
             "new_price": p.price, "error": p.error}

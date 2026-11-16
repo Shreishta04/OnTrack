@@ -27,6 +27,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
+import events
 import replies
 import services
 
@@ -95,6 +96,8 @@ def queue(conn, uid: int, kind: str, title: str, body: str, dedupe: str,
         "INSERT INTO alerts (user_id, kind, item_id, title, body, dedupe, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (user_id, dedupe) DO NOTHING RETURNING id",
         (uid, kind, item_id, title, body, dedupe, services.now())).fetchone()
+    if added is not None:
+        events.log("alerts", f"queued: {kind}", user_id=uid, item=item_id, text=body)
     return added is not None
 
 
@@ -143,6 +146,7 @@ def flush(conn, uid: int, send: Sender, at: datetime | None = None, ignore_quiet
         return result
     if not ignore_quiet and is_quiet(_local(conn, uid, at)):
         conn.commit()
+        events.log("alerts", "held until 8 am (quiet hours)", user_id=uid, waiting=len(waiting))
         return {**result, "held": len(waiting)}
 
     if len(waiting) > MAX_SEPARATE:
@@ -161,6 +165,8 @@ def flush(conn, uid: int, send: Sender, at: datetime | None = None, ignore_quiet
                 result["sent"] += 1
             elif outcome == "gone":          # app deleted, alerts turned off in iOS Settings…
                 conn.execute("DELETE FROM push_devices WHERE id = ?", (device["id"],))
+                events.log("alerts", "a phone stopped taking alerts: forgotten", user_id=uid, level="warn",
+                           device=device["id"])
             else:
                 result["failed"] += 1
     # Marked as sent even if one phone failed: a retry every hour would buzz the
@@ -168,6 +174,9 @@ def flush(conn, uid: int, send: Sender, at: datetime | None = None, ignore_quiet
     conn.execute("UPDATE alerts SET sent_at = ? WHERE user_id = ? AND sent_at IS NULL",
                  (at.isoformat(timespec="seconds"), uid))
     conn.commit()
+    events.log("alerts", "sent" if not result["failed"] else "sent, some phones failed", user_id=uid,
+               level="warn" if result["failed"] else "info", alerts=len(waiting), messages=len(messages),
+               phones=len(devices), delivered=result["sent"], failed=result["failed"])
     return result
 
 
@@ -225,9 +234,13 @@ async def tick(conn, extract_fn, send: Sender, at: datetime | None = None) -> di
             done.append(uid)
         except Exception as exc:                   # one person's problem doesn't stop the others
             conn.rollback()
-            services.log.warning("daily    user=%s failed: %s", uid, exc)
+            events.log("errors", "morning round failed for one person", user_id=uid, level="error",
+                       ref=events.new_ref(), error=f"{type(exc).__name__}: {exc}",
+                       traceback=events.trace())
     sent = {"sent": 0, "held": 0, "failed": 0}
     for row in conn.execute("SELECT DISTINCT user_id FROM alerts WHERE sent_at IS NULL").fetchall():
         for k, v in flush(conn, row["user_id"], send, at).items():
             sent[k] += v
+    purged = events.purge(conn)                    # logs older than 60 days
+    events.log("refresh", "hourly job", daily_rounds=len(done), log_lines_removed=purged or None, **sent)
     return {"daily_rounds": len(done), **sent}

@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field, HttpUrl
@@ -27,6 +28,7 @@ import socket
 
 import auth
 import db
+import events
 import fcm
 import notify
 import replies
@@ -238,18 +240,65 @@ app.add_middleware(
 # stuck never shows up, so the terminal looks silent. Printing when each request
 # STARTS (and how long slow ones took) makes a stuck request easy to spot.
 log = logging.getLogger("uvicorn.error")   # the logger uvicorn already prints to
-SLOW_REQUEST_SECONDS = 2
+SLOW_REQUEST_SECONDS = 1.0
+
+# Which log file a request belongs in, by the start of its address (first match wins).
+AREA_BY_PATH = [("/items/{item_id}/refresh", "refresh"), ("/links/{link_id}/from-html", "refresh"),
+                ("/refresh", "refresh"), ("/items", "items"), ("/links", "items"), ("/trash", "items"),
+                ("/auth", "accounts"), ("/me", "accounts"), ("/tokens", "accounts"), ("/invites", "accounts"),
+                ("/users", "accounts"), ("/setup", "accounts"), ("/budget", "budget"), ("/periods", "budget"),
+                ("/summary", "budget"), ("/notifications", "alerts"), ("/push", "alerts"), ("/cron", "alerts"),
+                ("/logs", "app")]
+QUIET_PATHS = {"/health", "/logs", "/logs/app"}  # (/logs/app writes its own line)                 # not worth a log line each time
+
+
+def area_for(path: str) -> str:
+    return next((area for prefix, area in AREA_BY_PATH if path.startswith(prefix)), "app")
 
 
 @app.middleware("http")
-async def log_request_start(request: Request, call_next):
+async def log_requests(request: Request, call_next):
+    """One log line per change, error or slow request, into its area's log.
+
+    Uvicorn prints a request's line only when it FINISHES, so a stuck request
+    never shows up: "started" is printed when each one begins. Reads (GET)
+    that went fine are left out of the logs (there are lots of them); every
+    change, every error and every slow request is written down.
+
+    Anything that crashes is caught here: the person gets a plain sentence
+    with a reference code, and errors.log gets the whole story."""
     start = time.monotonic()
+    token = events.begin(request.method, request.url.path)
     log.info("started  %s %s", request.method, request.url.path)
-    response = await call_next(request)
-    took = time.monotonic() - start
-    if took >= SLOW_REQUEST_SECONDS:
-        log.info("slow     %s %s took %.1f s", request.method, request.url.path, took)
-    return response
+    try:
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            ref = events.new_ref()
+            events.log("errors", f"crashed: {request.method} {request.url.path}", level="error", ref=ref,
+                       error=f"{type(exc).__name__}: {exc}", traceback=events.trace())
+            events.note(ref=ref)
+            response = JSONResponse(status_code=500, content={
+                "detail": f"Something went wrong on OnTrack's side. Try again in a moment. (ref {ref})"})
+        took = time.monotonic() - start
+        ctx = events.current() or {}
+        route = request.scope.get("route")
+        path = getattr(route, "path", request.url.path)          # "/items/{item_id}", not "/items/65"
+        status = response.status_code
+        slow = took >= SLOW_REQUEST_SECONDS
+        if path not in QUIET_PATHS and (request.method != "GET" or status >= 400 or slow):
+            level = "error" if status >= 500 else "warn" if status >= 400 else "info"
+            area = "speed" if slow and request.method == "GET" and status < 400 else area_for(path)
+            notes = dict(ctx.get("notes", {}))
+            ref = notes.pop("ref", None)
+            what = notes.pop("event", None)            # "item added", "moved to Recently deleted"…
+            line = f"{request.method} {path} → {status}"
+            events.log(area, f"{what} ({line})" if what else line, level=level, ref=ref, took=took,
+                       **{k: int(v) if str(v).isdigit() else v for k, v in request.path_params.items()}, **notes,
+                       parts=ctx.get("spans") if slow else None)
+        return response
+    finally:
+        events.end(token)
 
 
 # Errors for the iPhone Shortcuts. A Shortcut that asks for ?reply=text gets
@@ -311,7 +360,8 @@ def send_alerts(uid: int, send) -> None:
     try:
         notify.flush(conn, uid, send)
     except Exception as exc:
-        logging.getLogger("uvicorn.error").warning("push     flush failed: %s", exc)
+        events.log("errors", "sending alerts failed", user_id=uid, level="error", ref=events.new_ref(),
+                   error=f"{type(exc).__name__}: {exc}", traceback=events.trace())
     finally:
         conn.close()
 
@@ -338,28 +388,65 @@ def current_user(x_api_key: str | None = Header(None, description="Your login or
     """Who is asking. Every route that touches a list depends on this, so a
     request without a valid token never reaches the database queries.
     (FastAPI gives this and the route the same connection: one per request.)"""
-    return auth.user_for_token(conn, x_api_key)
+    user = auth.user_for_token(conn, x_api_key)
+    events.set_user(user["id"])           # every log line of this request says whose it was
+    return user
 
 
 # ------------------------------------------------------- errors -> HTTP codes
 
+# What the person reads instead of "Not found: item 65". The real message
+# goes to the log, under the same reference code.
+NOT_FOUND_WORDS = [("deleted item", "That item isn't in Recently deleted any more."),
+                   ("item", "That item isn't on your list any more. It may have been deleted on another device."),
+                   ("link", "That store link isn't on your list any more."),
+                   ("token", "That key was already removed."),
+                   ("invite", "That invite isn't there any more."),
+                   ("user", "That person isn't there any more.")]
+
+
 @app.exception_handler(NotFound)
 async def not_found(_: Request, exc: NotFound):
-    return JSONResponse(status_code=404, content={"detail": f"Not found: {exc}"})
+    ref = events.new_ref()
+    events.note(ref=ref, error=f"not found: {exc}")
+    words = next((text for key, text in NOT_FOUND_WORDS if str(exc).startswith(key)), "That isn't there any more.")
+    return JSONResponse(status_code=404, content={"detail": f"{words} (ref {ref})"})
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_input(_: Request, exc: RequestValidationError):
+    """422: a field missing or the wrong kind. The person gets one sentence;
+    the log gets which fields and why."""
+    ref = events.new_ref()
+    problems = [f"{'.'.join(str(p) for p in e.get('loc', []))}: {e.get('msg')}" for e in exc.errors()][:10]
+    events.note(ref=ref, error="invalid input", problems=problems)
+    return JSONResponse(status_code=422, content={
+        "detail": f"Something in that didn't look right. Check it and try again. (ref {ref})"})
+
+
+@app.exception_handler(HTTPException)
+async def http_error(_: Request, exc: HTTPException):
+    """Our own refusals (an unsafe link, an empty upload…): already plain sentences.
+    Noted for the log, then answered as before."""
+    events.note(error=exc.detail)
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
 
 @app.exception_handler(auth.AuthError)
 async def auth_error(_: Request, exc: auth.AuthError):
+    events.note(error=str(exc))
     return JSONResponse(status_code=401, content={"detail": str(exc)})
 
 
 @app.exception_handler(auth.Forbidden)
 async def forbidden(_: Request, exc: auth.Forbidden):
+    events.note(error=str(exc))
     return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
 @app.exception_handler(auth.BadRequest)
 async def bad_request(_: Request, exc: auth.BadRequest):
+    events.note(error=str(exc))
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
@@ -497,12 +584,15 @@ def post_signup(body: SignupIn, conn=Depends(get_db)):
     """Create an account with an invite code. Answers with a login token."""
     user, token = auth.signup(conn, body.invite, body.email, body.password, body.name,
                               body.currency.upper(), body.country.upper(), body.timezone)
+    events.set_user(user["id"])
+    events.note(event="signed up", currency=user["currency"], country=user["country"])
     return {"user": user, "token": token}
 
 
 @app.post("/auth/login")
 def post_login(body: LoginIn, conn=Depends(get_db)):
     user, token = auth.login(conn, body.email, body.password)
+    events.set_user(user["id"])
     return {"user": user, "token": token}
 
 
@@ -510,6 +600,8 @@ def post_login(body: LoginIn, conn=Depends(get_db)):
 def post_reset(body: ResetIn, conn=Depends(get_db)):
     """Use a password-reset link from the owner."""
     user, token = auth.reset_password(conn, body.code, body.password)
+    events.set_user(user["id"])
+    events.note(event="new password from a reset link")
     return {"user": user, "token": token}
 
 
@@ -806,7 +898,7 @@ def post_device_remove(body: DeviceIn, conn=Depends(get_db), user=Depends(curren
 def post_push_test(conn=Depends(get_db), user=Depends(current_user), send=Depends(get_sender)):
     """"Send a test": straight away, even at night."""
     if not fcm.configured() and send is fcm.send:
-        raise HTTPException(status_code=503, detail="Alerts aren't set up on the server yet (FIREBASE_SERVICE_ACCOUNT).")
+        raise HTTPException(status_code=503, detail="Alerts aren't switched on for OnTrack yet.")
     return notify.send_test(conn, user["id"], send)
 
 
@@ -825,3 +917,44 @@ async def post_cron_tick(x_cron_secret: str | None = Header(None), conn=Depends(
     if not x_cron_secret or not secrets.compare_digest(x_cron_secret, expected):
         raise HTTPException(status_code=401, detail="Wrong cron secret.")
     return await notify.tick(conn, extract, send)
+
+
+# ------------------------------------------------------------------- logs
+
+class AppProblemIn(BaseModel):
+    """Something the app itself ran into on a phone or laptop (a crash, a request that failed)."""
+    where: str = Field(..., max_length=100)          # "Undo", "Delete", "page crashed"…
+    message: str = Field(..., max_length=500)
+    detail: str | None = Field(None, max_length=3000)  # a stack trace, for crashes
+
+
+APP_REPORTS_PER_MINUTE = 30
+_app_reports: dict[int, deque] = defaultdict(deque)
+
+
+@app.post("/logs/app")
+def post_app_problem(body: AppProblemIn, user=Depends(current_user)):
+    """The app reports its own problems here, so they're in app.log too. Answers the
+    reference code the app can show. At most 30 a minute per person (a loop can't flood the log)."""
+    now = time.monotonic()
+    recent = _app_reports[user["id"]]
+    while recent and now - recent[0] > 60:
+        recent.popleft()
+    if len(recent) >= APP_REPORTS_PER_MINUTE:
+        return {"ref": None}
+    recent.append(now)
+    ref = events.new_ref()
+    events.log("app", f"app problem: {body.where}", level="warn", ref=ref,
+               message=body.message, detail=body.detail)
+    return {"ref": ref}
+
+
+@app.get("/logs")
+def get_logs(after_id: int = 0, area: str | None = None, limit: int = 2000,
+             user=Depends(current_user), conn=Depends(get_db)):
+    """Owner only: the logs, oldest first, from after `after_id` (pull_logs.py asks for
+    what's new since last time). Kept 60 days."""
+    if not user["is_admin"]:
+        raise auth.Forbidden("Only the owner can read the logs.")
+    events.flush()                                 # include what happened a moment ago
+    return events.read(conn, after_id=after_id, area=area, limit=max(1, min(limit, 5000)))

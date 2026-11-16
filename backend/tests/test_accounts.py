@@ -28,7 +28,7 @@ LIPSTICK = Product(url="https://www.savana.com/details/7", ok=True, title="MARS 
 def _wipe_postgres(url):
     import psycopg
     with psycopg.connect(url) as conn:
-        conn.execute("DROP TABLE IF EXISTS alerts, push_devices, periods, status_changes, price_history, links, items, settings, "
+        conn.execute("DROP TABLE IF EXISTS events, alerts, push_devices, periods, status_changes, price_history, links, items, settings, "
                      "invites, tokens, users CASCADE")
 
 

@@ -22,9 +22,12 @@ interface ItemListProps {
   period?: PeriodInfo // this budget period (Bought is grouped by period)
   zone?: string // the person's time zone: which day a purchase falls on
   oldestFirst?: boolean // the list is sorted oldest first
+  canRestore?: boolean // the server keeps deleted items
 }
 
-export default function ItemList({ items, tab, onAction, picked, onPick, query, period, zone, oldestFirst }: ItemListProps) {
+export default function ItemList({
+  items, tab, onAction, picked, onPick, query, period, zone, oldestFirst, canRestore,
+}: ItemListProps) {
   const row = (item: Item) => (
     <ItemRow
       key={item.id}
@@ -33,6 +36,7 @@ export default function ItemList({ items, tab, onAction, picked, onPick, query, 
       onAction={onAction}
       picked={picked.has(item.id)}
       onPick={() => onPick(item)}
+      canRestore={canRestore}
     />
   )
 
